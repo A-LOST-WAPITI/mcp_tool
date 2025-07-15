@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Macos Rubbish
+.DS_Store
+
+# output files
+*.csv
+target/**
+
+# do not upload model
+model/**
+cond_model/**
