@@ -95,17 +95,6 @@ class Config(object):
         for (key, value) in config.items():
             setattr(self, key, value)
 
-def load_property_model(model_path: str, model_head: str = None):
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model path {model_path} does not exist.")
-    else:
-        try:
-            property_model = DeepProperty(model_path) if model_head is None else DeepProperty(model_path, model_head=model_head)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model from {model_path}: {e}")
-        
-    return property_model
-
 def property_model_forward(model, struc: Structure):
     """
     Forward function for the property model.
@@ -125,6 +114,25 @@ def property_model_forward(model, struc: Structure):
     )[0].reshape(-1)
 
     return quantity
+
+def load_property_model(model_type: str, model_head: str = None):
+    perfix = 'cond_model/0415_h20_dpa3a_shareft_nosel_128_64_32_scp1_e1a_csilu3_rc6_arc_4_expsw_l16_128GPU_240by3_'
+    ava_model = [
+        'dielectric',
+        'jdft2d',
+        'log_gvrh',
+        'log_kvrh',
+        'mp_e_form',
+        'mp_gap',
+        'perovskites',
+        'phonons',
+        'sound'
+    ]
+    postfix = "_fold1"
+
+    assert model_type in ava_model, f"Model type must be one of {ava_model}, but got {model_type}."
+        
+    # return property_model
     
 def init_cond_model(config):
     rand_key = jax.random.PRNGKey(config.seed)
@@ -317,7 +325,7 @@ if __name__ == "__main__":
     x = (G, L, XYZ, A, W)
 
     print("====== before mcmc =====")
-    print ("XYZ:\n", XYZ)  # fractional coordinate 
+    print ("XYZ:\n", XYZ)  # fractional coordinate
     print ("A:\n", A)  # element type
     print ("W:\n", W)  # Wyckoff positions
     print ("L:\n", L)  # lattice
@@ -334,7 +342,7 @@ if __name__ == "__main__":
                     mc_steps=config.mc_steps // config.decay_step,
                     mc_width=config.mc_width, temp=temp)
         print("i, temp, acc", i, temp, acc)
-    print("MCMC Time elapsed: ", time()-start)
+    print("MCMC Time elapsed: ", time() - start)
 
     G, L, XYZ, A, W = x
 

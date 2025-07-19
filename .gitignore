@@ -15,7 +15,8 @@ wheels/
 # output files
 *.csv
 target/**
+!target/.gitkeep
 
 # do not upload model
-model/**
-cond_model/**
+model/**/
+cond_model/**/
