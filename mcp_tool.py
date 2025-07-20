@@ -32,16 +32,25 @@ from os import symlink
 from os.path import realpath, exists
 import argparse
 
-def make_cond_forward_fn(batch_forward_fn):
+def make_cond_forward_fn(batch_forward_fn, target_type: str = 'equal'):
+    if target_type == 'equal':
+        diff = lambda preds, target: np.abs(preds - target)
+    elif target_type == 'greater':
+        diff = lambda preds, target: np.clip(preds - target, 0, None)
+    elif target_type == 'less':
+        diff = lambda preds, target: np.clip(target - preds, 0, None)
+    elif target_type == 'minimize':
+        diff = lambda preds, eps: (preds ** 2) + 1.0 / (preds + eps)  # avoid division by zero
+    else:
+        raise ValueError(f"Unknown target type: {target_type}")
+
     def forward_fn(G, L, XYZ, A, W, target):
         # pull everything into pure NumPy float32 and ensure 1-D shape
         target_np = np.atleast_1d(np.asarray(target, dtype=np.float32))
-        preds_np  = np.atleast_1d(
+        preds_np = np.atleast_1d(
             np.asarray(batch_forward_fn((G, L, XYZ, A, W)), dtype=np.float32)
         )
-        diff_np   = np.abs(preds_np - target_np)
-        # 寻找小于目标值
-        # diff_np = np.clip(preds_np - target_np, 0, None)
+        diff_np = diff(preds_np, target_np)
         return diff_np.reshape(-1).astype(np.float32)
     return forward_fn
 
@@ -174,8 +183,8 @@ def load_property_model(model_type: str, model_head: str = None):
 def init_cond_model(config):
     rand_key = jax.random.PRNGKey(config.seed)
     # 将字符串转换为numpy数组
-    target_vec = jnp.array(literal_eval(config.target))
-    alpha_vec = jnp.array(literal_eval(config.alpha))
+    target_vec = jnp.array(config.target)
+    alpha_vec = jnp.array(config.alpha)
 
     if config.remove_radioactive:
         from crystalformer.src.elements import radioactive_elements_dict, noble_gas_dict
@@ -228,10 +237,10 @@ def init_cond_model(config):
     if config.mode == "single":
         print("\n========== Load single conditional model ==========")
         # Load the pre-trained MEGNet formation energy model.
-        cond_model_forward_fn = load_property_model(config.cond_model_type, config.model_head)
+        cond_model_forward_fn = load_property_model(config.cond_model_type[0], config.model_head[0])
 
         batch_forward_fn = make_forward_fn(cond_model_forward_fn)
-        forward_fn = make_cond_forward_fn(batch_forward_fn)
+        forward_fn = make_cond_forward_fn(batch_forward_fn, config.target_type[0])
         cond_logp_fn = make_cond_logp(
             logp_fn, forward_fn, 
             target=target_vec[0],
@@ -239,17 +248,16 @@ def init_cond_model(config):
         )
     elif config.mode == "multi":
         print("\n========== Load multiple conditional models ==========")
-        model_type_list = config.cond_model_path.split(',')
-        model_head_list = config.model_head.split(',') if config.model_head else [None] * len(model_type_list)
-        assert len(model_type_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
+        model_head_list = config.model_head if not config.model_head == [None] else [None] * len(config.model_type_list)
+        assert len(config.model_type_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
             "The number of models, targets, and alphas must match."
         batch_forward_fns = []
 
-        for model_type, model_head in zip(model_type_list, model_head_list):
+        for model_type, model_head, target_type in zip(config.model_type_list, model_head_list, config.target_type):
             cond_model_forward_fn = load_property_model(model_type, model_head)
             
             batch_forward_fn = make_forward_fn(cond_model_forward_fn)
-            forward_fn = make_cond_forward_fn(batch_forward_fn)
+            forward_fn = make_cond_forward_fn(batch_forward_fn, target_type)
             batch_forward_fns.append(forward_fn)
 
         cond_logp_fn = make_multi_cond_logp(
@@ -305,17 +313,19 @@ def get_args():
     parser = argparse.ArgumentParser(description='Script for running conditional generation with MCMC')
 
     # Paths and model info
-    parser.add_argument('--cond_model_type', type=str, required=True,
-                        help='Comma-separated types of conditional models to use.')
-    parser.add_argument('--model_head', type=str, default=None,
+    parser.add_argument('--cond_model_type', type=str, nargs='+', required=True,
+                        help='Types of conditional models to use.')
+    parser.add_argument('--model_head', type=str, nargs='+', default=[None],
                         help='Head of the model for specific task.')
 
     # Generation mode and targets
     parser.add_argument('--mode', type=str, default='single', choices=['single', 'multi'],
                         help='Generation mode: single or multi')
-    parser.add_argument('--target', type=str, default='-4, 3',
+    parser.add_argument('--target', type=float, nargs='+', required=True,
                         help='Target values (e.g., formation energy, bandgap)')
-    parser.add_argument('--alpha', type=str, default='10, 3',
+    parser.add_argument('--target_type', type=str, nargs='+',
+                        help='Type of target: equal, greater, less, minimize')
+    parser.add_argument('--alpha', type=float, nargs='+', required=True,
                         help='Guidance strength for generation')
 
     # Physics & constraints
