@@ -11,30 +11,9 @@ wmax_table = np.array(wmax_table)
 symops = np.array(symops)
 
 
-def make_forward_fn(model):
-
-    def forward_fn(struc: Structure):
-        """
-        Forward function for the property model.
-        config:
-            model: The property model to be used for prediction.
-            struc: A pymatgen Structure object.
-        Returns:
-            The predicted property value.
-        """
-        if not isinstance(struc, Structure):
-            raise TypeError("Input must be a pymatgen Structure object.")
-        
-        quantity = model.eval(
-            struc.cart_coords[np.newaxis, ...],
-            struc.lattice.matrix.reshape(1, 3, 3),
-            [elem.Z for elem in struc.species]
-        )[0].reshape(-1)
-
-        return quantity
-
+def make_forward_fn(forward_fn):
     def parallel_batch_forward(x):
-        x = jax.tree.map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
+        # x = jax.tree.map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
         G, L, XYZ, A, W = x
         G, L, XYZ, A, W = np.array(G), np.array(L), np.array(XYZ), np.array(A), np.array(W)
         x = (G, L, XYZ, A, W)
@@ -44,14 +23,16 @@ def make_forward_fn(model):
             for info in zip(*x)
         ]
         
-        with mp.Pool(processes=mp.cpu_count()) as pool:
-            output = pool.map(forward_fn, struc_list)
+        # TODO: 并行运行
+        # with mp.Pool(processes=mp.cpu_count()) as pool:
+        #     output = pool.map(forward_fn, struc_list)
+        output = list(map(forward_fn, struc_list))
 
         # unpack the output
         output = np.array(output)
         # reshape it back to the original shape
         output = np.reshape(output, G.shape)
-        output = jax.device_put(output, jax.devices('gpu')[0]).block_until_ready()
+        # output = jax.device_put(output, jax.devices('gpu')[0]).block_until_ready()
         
         return output
 

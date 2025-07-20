@@ -95,17 +95,82 @@ class Config(object):
         for (key, value) in config.items():
             setattr(self, key, value)
 
-def load_property_model(model_path: str, model_head: str = None):
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model path {model_path} does not exist.")
-    else:
-        try:
-            property_model = DeepProperty(model_path) if model_head is None else DeepProperty(model_path, model_head=model_head)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model from {model_path}: {e}")
-        
-    return property_model
+def simple_property_forward(model, struc: Structure):
+    """
+    Forward function for the property model.
+    config:
+        model: The property model to be used for prediction.
+        struc: A pymatgen Structure object.
+    Returns:
+        The predicted property value.
+    """
+    if not isinstance(struc, Structure):
+        raise TypeError("Input must be a pymatgen Structure object.")
     
+    quantity = model.eval(
+        struc.cart_coords[np.newaxis, ...],
+        struc.lattice.matrix.reshape(1, 3, 3),
+        [elem.Z for elem in struc.species]
+    )[0].reshape(-1)
+
+    return quantity
+
+def sound_forward(model_forward_fn_list, struc: Structure):
+    density = float(struc.density) * 1e3 # g/cm^3 to kg/m^3
+
+    log_G, log_K = [forward_fn(struc) for forward_fn in model_forward_fn_list]
+    G_Pa = np.exp(log_G) * 1e9  # GPa to Pa
+    K_Pa = np.exp(log_K) * 1e9  # GPa to Pa
+
+    # Longitudinal velocity
+    v_L = np.sqrt((K_Pa + (4/3) * G_Pa) / density)
+
+    # Shear velocity
+    v_S = np.sqrt(G_Pa / density)
+    # Average velocity
+    v_m = (1/3 * (1/v_L**3 + 2/v_S**3)) ** (-1/3)
+    
+    return v_m
+
+def load_property_model(model_type: str, model_head: str = None):
+    perfix = 'cond_model/0415_h20_dpa3a_shareft_nosel_128_64_32_scp1_e1a_csilu3_rc6_arc_4_expsw_l16_128GPU_240by3_matbench_'
+    ava_model_dict = {
+        'simple': [
+            'dielectric',
+            'jdft2d',
+            'log_gvrh',
+            'log_kvrh',
+            'mp_e_form',
+            'mp_gap',
+            'perovskites',
+            'phonons',
+        ],
+        'hybrid': [
+            'sound'
+        ]
+    }
+    postfix = "_fold1"
+
+    if model_type in ava_model_dict['simple']:
+        model_dir = f'{perfix}{model_type}{postfix}'
+        model_file = f'{model_dir}/{os.listdir(model_dir)[0]}'
+        # TODO: head selection
+        model = DeepProperty(model_file)
+
+        return lambda struc: simple_property_forward(model, struc)
+    elif model_type in ava_model_dict['hybrid']:
+        if model_type == 'sound':
+            model_forward_fn_list = [
+                load_property_model('log_gvrh'),
+                load_property_model('log_kvrh')
+            ]
+
+            return lambda struc: sound_forward(model_forward_fn_list, struc)
+        else:
+            raise ValueError(f"Model type '{model_type}' is not supported in hybrid models. Available types: {ava_model_dict['hybrid']}")
+    else:
+        raise ValueError(f"Model type '{model_type}' is not supported. Available types: {ava_model_dict['simple'] + ava_model_dict['hybrid']}")
+            
 def init_cond_model(config):
     rand_key = jax.random.PRNGKey(config.seed)
     # 将字符串转换为numpy数组
@@ -163,9 +228,9 @@ def init_cond_model(config):
     if config.mode == "single":
         print("\n========== Load single conditional model ==========")
         # Load the pre-trained MEGNet formation energy model.
-        model = load_property_model(config.cond_model_path, config.model_head)
+        cond_model_forward_fn = load_property_model(config.cond_model_type, config.model_head)
 
-        batch_forward_fn = make_forward_fn(model)
+        batch_forward_fn = make_forward_fn(cond_model_forward_fn)
         forward_fn = make_cond_forward_fn(batch_forward_fn)
         cond_logp_fn = make_cond_logp(
             logp_fn, forward_fn, 
@@ -174,16 +239,16 @@ def init_cond_model(config):
         )
     elif config.mode == "multi":
         print("\n========== Load multiple conditional models ==========")
-        model_path_list = config.cond_model_path.split(',')
+        model_type_list = config.cond_model_path.split(',')
         model_head_list = config.model_head.split(',') if config.model_head else [None] * len(model_path_list)
-        assert len(model_path_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
+        assert len(model_type_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
             "The number of models, targets, and alphas must match."
         batch_forward_fns = []
 
-        for model_path, model_head in zip(model_path_list, model_head_list):
-            model = load_property_model(model_path, model_head)
+        for model_type, model_head in zip(model_type_list, model_head_list):
+            cond_model_forward_fn = load_property_model(model_type, model_head)
             
-            batch_forward_fn = make_forward_fn(model)
+            batch_forward_fn = make_forward_fn(cond_model_forward_fn)
             forward_fn = make_cond_forward_fn(batch_forward_fn)
             batch_forward_fns.append(forward_fn)
 
@@ -240,8 +305,8 @@ def get_args():
     parser = argparse.ArgumentParser(description='Script for running conditional generation with MCMC')
 
     # Paths and model info
-    parser.add_argument('--cond_model_path', type=str, required=True,
-                        help='Comma-separated paths to conditional models')
+    parser.add_argument('--cond_model_type', type=str, required=True,
+                        help='Comma-separated types of conditional models to use.')
     parser.add_argument('--model_head', type=str, default=None,
                         help='Head of the model for specific task.')
 

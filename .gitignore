@@ -23,3 +23,6 @@ target/**
 # do not upload model
 model/**/
 cond_model/**/
+
+# uv
+uv.lock
