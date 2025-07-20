@@ -12,8 +12,11 @@ wheels/
 # Macos Rubbish
 .DS_Store
 
+# test files
+test*
+
 # output files
-*.csv
+./*.csv
 target/**
 !target/.gitkeep
 

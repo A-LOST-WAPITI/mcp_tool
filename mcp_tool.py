@@ -29,7 +29,7 @@ from deepmd.infer.deep_property import DeepProperty
 from tempfile import TemporaryDirectory
 from subprocess import Popen
 from os import symlink
-from os.path import realpath
+from os.path import realpath, exists
 import argparse
 
 def make_cond_forward_fn(batch_forward_fn):
@@ -95,44 +95,16 @@ class Config(object):
         for (key, value) in config.items():
             setattr(self, key, value)
 
-def property_model_forward(model, struc: Structure):
-    """
-    Forward function for the property model.
-    config:
-        model: The property model to be used for prediction.
-        struc: A pymatgen Structure object.
-    Returns:
-        The predicted property value.
-    """
-    if not isinstance(struc, Structure):
-        raise TypeError("Input must be a pymatgen Structure object.")
-    
-    quantity = model.eval(
-        struc.cart_coords[np.newaxis, ...],
-        struc.lattice.matrix.reshape(1, 3, 3),
-        [elem.Z for elem in struc.species]
-    )[0].reshape(-1)
-
-    return quantity
-
-def load_property_model(model_type: str, model_head: str = None):
-    perfix = 'cond_model/0415_h20_dpa3a_shareft_nosel_128_64_32_scp1_e1a_csilu3_rc6_arc_4_expsw_l16_128GPU_240by3_'
-    ava_model = [
-        'dielectric',
-        'jdft2d',
-        'log_gvrh',
-        'log_kvrh',
-        'mp_e_form',
-        'mp_gap',
-        'perovskites',
-        'phonons',
-        'sound'
-    ]
-    postfix = "_fold1"
-
-    assert model_type in ava_model, f"Model type must be one of {ava_model}, but got {model_type}."
+def load_property_model(model_path: str, model_head: str = None):
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path {model_path} does not exist.")
+    else:
+        try:
+            property_model = DeepProperty(model_path) if model_head is None else DeepProperty(model_path, model_head=model_head)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model from {model_path}: {e}")
         
-    # return property_model
+    return property_model
     
 def init_cond_model(config):
     rand_key = jax.random.PRNGKey(config.seed)
@@ -192,9 +164,8 @@ def init_cond_model(config):
         print("\n========== Load single conditional model ==========")
         # Load the pre-trained MEGNet formation energy model.
         model = load_property_model(config.cond_model_path, config.model_head)
-        model_forward = lambda x: property_model_forward(model, x)
 
-        _, batch_forward_fn = make_forward_fn(model_forward)
+        batch_forward_fn = make_forward_fn(model)
         forward_fn = make_cond_forward_fn(batch_forward_fn)
         cond_logp_fn = make_cond_logp(
             logp_fn, forward_fn, 
@@ -211,9 +182,8 @@ def init_cond_model(config):
 
         for model_path, model_head in zip(model_path_list, model_head_list):
             model = load_property_model(model_path, model_head)
-            model_forward = lambda x: property_model_forward(model, x)
             
-            _, batch_forward_fn = make_forward_fn(model_forward)
+            batch_forward_fn = make_forward_fn(model)
             forward_fn = make_cond_forward_fn(batch_forward_fn)
             batch_forward_fns.append(forward_fn)
 
@@ -285,7 +255,9 @@ def get_args():
 
     # Physics & constraints
     parser.add_argument('--spacegroup', type=int, required=True, nargs='+',
-                        help='Space group number(s) for generation')
+                        help='Minimum spacegroup number to sample from')
+    parser.add_argument('--random_spacegroup_num', type=int, default=0,
+                        help='Number of random spacegroups to sample from')
     parser.add_argument('--init_sample_temperature', type=float, default=1.0,
                         help='Initial sampling temperature')
     parser.add_argument('--init_sample_num', type=int, default=100,
@@ -311,8 +283,17 @@ if __name__ == "__main__":
     config = Config(config_dict)
 
     print("\n======= Generate Samples =======")
+    # Wether smaple from random spacegroup
+    if config.random_spacegroup_num > 0:
+        spacegroup = np.random.choice(
+            range(config.spacegroup[0], 231),
+            size=config.random_spacegroup_num,
+        )
+        print(f"Randomly sample from spacegroups: {spacegroup}")
+    else:
+        spacegroup = config.spacegroup
     G, L, XYZ, A, W = generate_sample(
-        spacegroup=config.spacegroup,
+        spacegroup=spacegroup,
         num_samples=config.init_sample_num,  # Number of samples to generate
         temperature=config.init_sample_temperature  # Temperature for sampling
     )
@@ -357,8 +338,10 @@ if __name__ == "__main__":
     M = jax.vmap(lambda g, w: mult_table[g-1, w], in_axes=(0, 0))(G, W) 
     num_atoms = jnp.sum(M, axis=1)
 
-    struc_list = map(revert, G, L, XYZ, A, W)
+    struc_list = list(map(revert, G, L, XYZ, A, W))
 
+    if not exists("target"):
+        os.makedirs("target")
     for (idx, sorted_idx) in enumerate(sorted_idx_vec):
         struc = struc_list[sorted_idx]
         struc.sort()

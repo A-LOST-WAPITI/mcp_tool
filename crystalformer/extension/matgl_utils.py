@@ -1,10 +1,7 @@
 import jax
-import jax.numpy as jnp
 import numpy as np
-import joblib
+import pathos.multiprocessing as mp
 from pymatgen.core import Structure, Lattice
-from pymatgen.io.ase import AseAtomsAdaptor
-# from matgl.ext.ase import PESCalculator
 
 from crystalformer.src.wyckoff import mult_table, wmax_table, symops
 
@@ -14,36 +11,41 @@ wmax_table = np.array(wmax_table)
 symops = np.array(symops)
 
 
-def make_forward_fn(model, dummy_value=5):
+def make_forward_fn(model):
 
-    def forward_fn(x):
-        try: 
-            struct = revert(*x)
-            quantity = model(struct)
-            # if quantity is nan, return a dummy value
-            quantity = quantity if not np.isnan(quantity) else np.array(dummy_value)
-        except:
-            quantity = np.array(dummy_value)  #TODO: check if this is a good idea
+    def forward_fn(struc: Structure):
+        """
+        Forward function for the property model.
+        config:
+            model: The property model to be used for prediction.
+            struc: A pymatgen Structure object.
+        Returns:
+            The predicted property value.
+        """
+        if not isinstance(struc, Structure):
+            raise TypeError("Input must be a pymatgen Structure object.")
         
+        quantity = model.eval(
+            struc.cart_coords[np.newaxis, ...],
+            struc.lattice.matrix.reshape(1, 3, 3),
+            [elem.Z for elem in struc.species]
+        )[0].reshape(-1)
+
         return quantity
 
-    def batch_forward_fn(x):
-        output = map(forward_fn, zip(*x))
-        output = np.array(list(output))
-
-        return output
-
-    def parallel_batch_forward(x, batch_size=50):
-        x = jax.tree_map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
+    def parallel_batch_forward(x):
+        x = jax.tree.map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
         G, L, XYZ, A, W = x
         G, L, XYZ, A, W = np.array(G), np.array(L), np.array(XYZ), np.array(A), np.array(W)
         x = (G, L, XYZ, A, W)
 
-        xs = [[_x[i:i+batch_size] for _x in x] for i in range(0, G.shape[0], batch_size)]
+        struc_list = [
+            revert(*info)
+            for info in zip(*x)
+        ]
         
-        output = joblib.Parallel(
-            n_jobs=-1,
-        )(joblib.delayed(batch_forward_fn)(_x) for _x in xs)
+        with mp.Pool(processes=mp.cpu_count()) as pool:
+            output = pool.map(forward_fn, struc_list)
 
         # unpack the output
         output = np.array(output)
@@ -53,58 +55,7 @@ def make_forward_fn(model, dummy_value=5):
         
         return output
 
-    # TODO: 没有使用parallel版本可能带来的性能问题
-    return forward_fn, batch_forward_fn, 
-
-
-# def make_force_forward_fn(pot):
-
-    ase_adaptor = AseAtomsAdaptor()
-    calc = PESCalculator(pot)
-
-    def forward_fn(x):
-        try: 
-            struct = revert(*x)
-            atoms = ase_adaptor.get_atoms(struct)
-            atoms.calc = calc
-            # if quantity is nan, return a dummy value
-            forces = atoms.get_forces()
-        except:
-            forces = np.ones((1, 3))*np.inf # avoid nan
-        forces = np.linalg.norm(forces, axis=-1)
-        forces = np.clip(forces, 1e-2, 1e2)  # avoid too large or too small forces
-        forces = np.mean(forces)
-        
-        return np.log(forces)
-
-    def batch_forward_fn(x):
-        output = map(forward_fn, zip(*x))
-        output = np.array(list(output))
-
-        return output
-
-    def parallel_batch_forward(x, batch_size=50):
-        x = jax.tree_map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
-        G, L, XYZ, A, W = x
-        G, L, XYZ, A, W = np.array(G), np.array(L), np.array(XYZ), np.array(A), np.array(W)
-        x = (G, L, XYZ, A, W)
-
-        xs = [[_x[i:i+batch_size] for _x in x] for i in range(0, G.shape[0], batch_size)]
-        
-        output = joblib.Parallel(
-            n_jobs=-1,
-        )(joblib.delayed(batch_forward_fn)(_x) for _x in xs)
-
-        # unpack the output
-        output = np.array(output)
-        # reshape it back to the original shape
-        output = np.reshape(output, G.shape)
-        output = jax.device_put(output, jax.devices('gpu')[0]).block_until_ready()
-        
-        return output
-
-    return forward_fn, parallel_batch_forward
-
+    return parallel_batch_forward
 
 def symmetrize_atoms(g, w, x):
 
@@ -154,73 +105,18 @@ def revert(G, L, X, A, W):
 
 
 if __name__  == "__main__":
-    import matgl
-    # from crystalformer.src.utils import GLXYZAW_from_file
-    from crystalformer.cli.classifier import GLXYZAW_from_sample
-    from functools import partial
-    from time import time
-    import torch
-    import warnings
-    torch.set_default_device("cpu")
-    warnings.filterwarnings("ignore")
+    import os
+    from deepmd.infer.deep_property import DeepProperty
+    from os import listdir
+    from pymatgen.core import Structure
+    import numpy as np
+    model = DeepProperty('/Users/roy/Work/mcp_tool/cond_model/0415_h20_dpa3a_shareft_nosel_128_64_32_scp1_e1a_csilu3_rc6_arc_4_expsw_l16_128GPU_240by3_matbench_dielectric_fold1/model.ckpt-200000.pt')
 
-    def make_callback_forward(forward):
-        def callback_forward(x):
-            G, _, _, _, _ = x
-            result_shape = jax.ShapeDtypeStruct(G.shape, jnp.float32)
-            return jax.experimental.io_callback(forward, result_shape, x)
-        return callback_forward
+    struc_list = []
+    for file in listdir('target'):
+        if file.startswith("POSCAR"):
+            struc_list.append(Structure.from_file(f'target/{file}'))
 
-    # formation energy model
-    model = matgl.load_model("/data/zdcao/website/matgl/pretrained_models/MEGNet-MP-2018.6.1-Eform")
-    model = model.predict_structure
-
-    # band gap model
-    model = matgl.load_model("/data/zdcao/website/matgl/pretrained_models/MEGNet-MP-2019.4.1-BandGap-mfi")
-    model = partial(model.predict_structure, state_attr=torch.tensor([0]))
-
-    forward_fn, parallel_batch_forward = make_forward_fn(model)
-
-    # data = GLXYZAW_from_file('./data/mini.csv', n_max=21, wyck_types=28, atom_types=119)
-    data = GLXYZAW_from_sample(225, "/home/zdcao/website/distance/crystal_gpt/experimental/base/output_225.csv")
-
-    ##################### single forward #####################
-    s_time = time()
-    output = forward_fn(jax.tree.map(lambda x: x[0], data))
-    print("Single forward Time taken: ", time() - s_time)
-
-    ##################### parallel batch forward #####################
-    s_time = time()
-    output = parallel_batch_forward(data)
-    print("batch forward Time taken: ", time() - s_time)
-    # print(output)
-
-    ##################### callback parallel batch forward #####################
-    s_time = time()
-    callback_forward = make_callback_forward(parallel_batch_forward)
-    output = callback_forward(data)
-    print(output.shape)
-    print("callback batch forward Time taken: ", time() - s_time)
-
-    ##################### force forward #####################
-    print("================= Force forward =====================")
-    model = matgl.load_model("/data/zdcao/website/matgl/pretrained_models/M3GNet-MP-2021.2.8-PES")
-    forward_fn, parallel_batch_forward =  make_force_forward_fn(model)
-
-    ##################### single forward #####################
-    s_time = time()
-    output = forward_fn(jax.tree.map(lambda x: x[0], data))
-    print("Single forward Time taken: ", time() - s_time)
-
-    ##################### parallel batch forward #####################
-    s_time = time()
-    output = parallel_batch_forward(data, batch_size=50)
-    print("batch forward Time taken: ", time() - s_time)
-    # print(output)
-
-    ##################### callback parallel batch forward #####################
-    s_time = time()
-    callback_forward = make_callback_forward(parallel_batch_forward)
-    output = callback_forward(data)
-    print(output.shape)
-    print("callback batch forward Time taken: ", time() - s_time)
+    parallel_batch_forward = make_forward_fn(model)
+    results = parallel_batch_forward(struc_list)
+    print(results)
