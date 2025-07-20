@@ -240,7 +240,7 @@ def init_cond_model(config):
     elif config.mode == "multi":
         print("\n========== Load multiple conditional models ==========")
         model_type_list = config.cond_model_path.split(',')
-        model_head_list = config.model_head.split(',') if config.model_head else [None] * len(model_path_list)
+        model_head_list = config.model_head.split(',') if config.model_head else [None] * len(model_type_list)
         assert len(model_type_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
             "The number of models, targets, and alphas must match."
         batch_forward_fns = []
