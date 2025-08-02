@@ -14,6 +14,7 @@ from jax.flatten_util import ravel_pytree
 import pandas as pd
 import numpy as np
 from ast import literal_eval
+from typing import Sequence, Tuple
 
 import crystalformer.src.checkpoint as checkpoint
 from crystalformer.src.wyckoff import mult_table
@@ -104,30 +105,51 @@ class Config(object):
         for (key, value) in config.items():
             setattr(self, key, value)
 
-def simple_property_forward(model, struc: Structure):
-    """
-    Forward function for the property model.
-    config:
-        model: The property model to be used for prediction.
-        struc: A pymatgen Structure object.
-    Returns:
-        The predicted property value.
-    """
-    if not isinstance(struc, Structure):
-        raise TypeError("Input must be a pymatgen Structure object.")
+def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarray:
+    def _pad_batch_structures(
+            strucs: Sequence[Structure]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Pads a list/tuple of pymatgen Structures to the largest atom count.
+        Returns
+        -------
+        coords   : (B, N_max, 3) float32
+        lattice  : (B, 3, 3)     float32
+        atom_Z   : (B, N_max)    int32      (padding == -1)
+        """
+        if len(strucs) == 0:
+            raise ValueError("Got an empty batch.")
+        B        = len(strucs)
+        N_max    = max(len(s) for s in strucs)
+        coords   = np.zeros((B, N_max, 3), dtype=np.float32)        # pad 0
+        lattice  = np.zeros((B, 3, 3),     dtype=np.float32)        # one per struct
+        atom_Z   = np.full((B, N_max), -1, dtype=np.int32)          # pad –1
+        for i, s in enumerate(strucs):
+            n = len(s)
+            coords[i, :n] = s.cart_coords
+            atom_Z[i, :n] = [sp.Z for sp in s.species]
+            lattice[i]    = s.lattice.matrix
+        return coords, lattice, atom_Z
     
-    quantity = model.eval(
-        struc.cart_coords[np.newaxis, ...],
-        struc.lattice.matrix.reshape(1, 3, 3),
-        [elem.Z for elem in struc.species]
+    cart_coords, lattice, atom_Z = _pad_batch_structures(struc_list)
+
+    # forward pass
+    output = model.eval(
+        cart_coords,
+        lattice,
+        atom_Z,
+        mixed_type=True
     )[0].reshape(-1)
 
-    return quantity
+    return output.astype(np.float32)
 
-def sound_forward(model_forward_fn_list, struc: Structure):
-    density = float(struc.density) * 1e3 # g/cm^3 to kg/m^3
+def sound_forward(model_forward_fn_list, struc_list: Sequence[Structure]):
+    density = [
+        float(struc.density) * 1e3 # g/cm^3 to kg/m^3
+        for struc in struc_list
+    ]
 
-    log_G, log_K = [forward_fn(struc) for forward_fn in model_forward_fn_list]
+    log_G, log_K = [forward_fn(struc_list) for forward_fn in model_forward_fn_list]
     G_Pa = np.exp(log_G) * 1e9  # GPa to Pa
     K_Pa = np.exp(log_K) * 1e9  # GPa to Pa
 
@@ -166,7 +188,7 @@ def load_property_model(model_type: str, model_head: str = None):
         # TODO: head selection
         model = DeepProperty(model_file)
 
-        return lambda struc: simple_property_forward(model, struc)
+        return lambda struc_list: simple_property_forward(model, struc_list)
     elif model_type in ava_model_dict['hybrid']:
         if model_type == 'sound':
             model_forward_fn_list = [
@@ -174,7 +196,7 @@ def load_property_model(model_type: str, model_head: str = None):
                 load_property_model('log_kvrh')
             ]
 
-            return lambda struc: sound_forward(model_forward_fn_list, struc)
+            return lambda struc_list: sound_forward(model_forward_fn_list, struc_list)
         else:
             raise ValueError(f"Model type '{model_type}' is not supported in hybrid models. Available types: {ava_model_dict['hybrid']}")
     else:

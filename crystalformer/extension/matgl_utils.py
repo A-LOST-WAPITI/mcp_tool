@@ -1,7 +1,6 @@
-import jax
 import numpy as np
-import pathos.multiprocessing as mp
 from pymatgen.core import Structure, Lattice
+from typing import Sequence, Tuple
 
 from crystalformer.src.wyckoff import mult_table, wmax_table, symops
 
@@ -23,10 +22,9 @@ def make_forward_fn(forward_fn):
             for info in zip(*x)
         ]
         
-        # TODO: 并行运行
-        # with mp.Pool(processes=mp.cpu_count()) as pool:
-        #     output = pool.map(forward_fn, struc_list)
-        output = list(map(forward_fn, struc_list))
+        # forward pass
+        # TODO: BATCH_SIZE
+        output = forward_fn(struc_list)
 
         # unpack the output
         output = np.array(output)
