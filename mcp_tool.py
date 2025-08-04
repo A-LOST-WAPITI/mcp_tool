@@ -186,7 +186,7 @@ def load_property_model(model_type: str, model_head: str = None):
         model_dir = f'{perfix}{model_type}{postfix}'
         model_file = f'{model_dir}/{os.listdir(model_dir)[0]}'
         # TODO: head selection
-        model = DeepProperty(model_file)
+        model = DeepProperty(model_file, auto_batch_size=True)
 
         return lambda struc_list: simple_property_forward(model, struc_list)
     elif model_type in ava_model_dict['hybrid']:
