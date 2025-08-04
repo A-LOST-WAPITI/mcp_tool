@@ -120,26 +120,30 @@ def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarra
         if len(strucs) == 0:
             raise ValueError("Got an empty batch.")
         B        = len(strucs)
+        natoms   = np.array([len(s) for s in strucs])
         N_max    = max(len(s) for s in strucs)
         coords   = np.zeros((B, N_max, 3), dtype=np.float32)        # pad 0
         lattice  = np.zeros((B, 3, 3),     dtype=np.float32)        # one per struct
         atom_Z   = np.full((B, N_max), -1, dtype=np.int32)          # pad –1
         for i, s in enumerate(strucs):
-            n = len(s)
+            n = natoms[i]
             coords[i, :n] = s.cart_coords
-            atom_Z[i, :n] = [sp.Z for sp in s.species]
+            atom_Z[i, :n] = s.atomic_numbers
             lattice[i]    = s.lattice.matrix
-        return coords, lattice, atom_Z
+        
+        result_size_raito = natoms / N_max
+        return coords, lattice, atom_Z, result_size_raito
     
-    cart_coords, lattice, atom_Z = _pad_batch_structures(struc_list)
+    cart_coords, lattice, atom_Z, result_size_raito = _pad_batch_structures(struc_list)
 
     # forward pass
+    # FIXME：padding size influence the result
     output = model.eval(
         cart_coords,
         lattice,
         atom_Z,
         mixed_type=True
-    )[0].reshape(-1)
+    )[0].reshape(-1) / result_size_raito
 
     return output.astype(np.float32)
 
