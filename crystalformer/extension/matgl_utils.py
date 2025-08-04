@@ -1,6 +1,6 @@
 import numpy as np
+import jax
 from pymatgen.core import Structure, Lattice
-from typing import Sequence, Tuple
 
 from crystalformer.src.wyckoff import mult_table, wmax_table, symops
 
@@ -12,7 +12,7 @@ symops = np.array(symops)
 
 def make_forward_fn(forward_fn):
     def parallel_batch_forward(x):
-        # x = jax.tree.map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
+        x = jax.tree.map(lambda _x: jax.device_put(_x, jax.devices('cpu')[0]), x)
         G, L, XYZ, A, W = x
         G, L, XYZ, A, W = np.array(G), np.array(L), np.array(XYZ), np.array(A), np.array(W)
         x = (G, L, XYZ, A, W)
@@ -30,7 +30,7 @@ def make_forward_fn(forward_fn):
         output = np.array(output)
         # reshape it back to the original shape
         output = np.reshape(output, G.shape)
-        # output = jax.device_put(output, jax.devices('gpu')[0]).block_until_ready()
+        output = jax.device_put(output, jax.devices('gpu')[0]).block_until_ready()
         
         return output
 
