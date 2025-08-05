@@ -32,6 +32,7 @@ from subprocess import Popen
 from os import symlink
 from os.path import realpath, exists
 import argparse
+import torch
 
 def make_cond_forward_fn(batch_forward_fn, target_type: str = 'equal'):
     if target_type == 'equal':
@@ -137,13 +138,17 @@ def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarra
     cart_coords, lattice, atom_Z, result_size_raito = _pad_batch_structures(struc_list)
 
     # forward pass
-    # FIXME：padding size influence the result
-    output = model.eval(
-        cart_coords,
-        lattice,
-        atom_Z,
-        mixed_type=True
-    )[0].reshape(-1) / result_size_raito
+    with torch.no_grad():
+        torch.cuda.empty_cache()
+        output = model.eval(
+            cart_coords,
+            lattice,
+            atom_Z,
+            mixed_type=True
+        )[0].reshape(-1) / result_size_raito
+
+    # sync
+    torch.cuda.synchronize()
 
     return output.astype(np.float32)
 
@@ -167,37 +172,35 @@ def sound_forward(model_forward_fn_list, struc_list: Sequence[Structure]):
     
     return v_m
 
-def load_property_model(model_type: str, model_head: str = None):
-    perfix = 'cond_model/0415_h20_dpa3a_shareft_nosel_128_64_32_scp1_e1a_csilu3_rc6_arc_4_expsw_l16_128GPU_240by3_matbench_'
+def load_property_model(model_type: str):
+    base_model_dir = '/opt/agents/thermal_properties/models/'
     ava_model_dict = {
         'simple': [
-            'dielectric',
-            'jdft2d',
-            'log_gvrh',
-            'log_kvrh',
-            'mp_e_form',
-            'mp_gap',
-            'perovskites',
-            'phonons',
+            'bandgap',
+            'shear_modulus',
+            'bulk_modulus',
+            'ambient_pressure',
+            'high_pressure'
         ],
         'hybrid': [
             'sound'
         ]
     }
-    postfix = "_fold1"
 
     if model_type in ava_model_dict['simple']:
-        model_dir = f'{perfix}{model_type}{postfix}'
+        model_dir = f'{base_model_dir}{model_type}/'
         model_file = f'{model_dir}/{os.listdir(model_dir)[0]}'
-        # TODO: head selection
-        model = DeepProperty(model_file, auto_batch_size=True)
+        if model_type == 'high_pressure':
+            model = DeepProperty(model_file, auto_batch_size=True, head='tc')
+        else:
+            model = DeepProperty(model_file, auto_batch_size=True)
 
         return lambda struc_list: simple_property_forward(model, struc_list)
     elif model_type in ava_model_dict['hybrid']:
         if model_type == 'sound':
             model_forward_fn_list = [
-                load_property_model('log_gvrh'),
-                load_property_model('log_kvrh')
+                load_property_model('shear_modulus'),
+                load_property_model('bulk_modulus')
             ]
 
             return lambda struc_list: sound_forward(model_forward_fn_list, struc_list)
@@ -263,7 +266,7 @@ def init_cond_model(config):
     if config.mode == "single":
         print("\n========== Load single conditional model ==========")
         # Load the pre-trained MEGNet formation energy model.
-        cond_model_forward_fn = load_property_model(config.cond_model_type[0], config.model_head[0])
+        cond_model_forward_fn = load_property_model(config.cond_model_type[0])
 
         batch_forward_fn = make_forward_fn(cond_model_forward_fn)
         forward_fn = make_cond_forward_fn(batch_forward_fn, config.target_type[0])
@@ -274,13 +277,12 @@ def init_cond_model(config):
         )
     elif config.mode == "multi":
         print("\n========== Load multiple conditional models ==========")
-        model_head_list = config.model_head if not config.model_head == [None] else [None] * len(config.model_type_list)
-        assert len(config.model_type_list) == len(target_vec) == len(alpha_vec) == len(model_head_list), \
+        assert len(config.model_type_list) == len(target_vec) == len(alpha_vec), \
             "The number of models, targets, and alphas must match."
         batch_forward_fns = []
 
-        for model_type, model_head, target_type in zip(config.model_type_list, model_head_list, config.target_type):
-            cond_model_forward_fn = load_property_model(model_type, model_head)
+        for model_type, target_type in zip(config.model_type_list, config.target_type):
+            cond_model_forward_fn = load_property_model(model_type)
             
             batch_forward_fn = make_forward_fn(cond_model_forward_fn)
             forward_fn = make_cond_forward_fn(batch_forward_fn, target_type)
@@ -341,8 +343,6 @@ def get_args():
     # Paths and model info
     parser.add_argument('--cond_model_type', type=str, nargs='+', required=True,
                         help='Types of conditional models to use.')
-    parser.add_argument('--model_head', type=str, nargs='+', default=[None],
-                        help='Head of the model for specific task.')
 
     # Generation mode and targets
     parser.add_argument('--mode', type=str, default='single', choices=['single', 'multi'],
