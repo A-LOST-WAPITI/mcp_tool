@@ -277,11 +277,11 @@ def init_cond_model(config):
         )
     elif config.mode == "multi":
         print("\n========== Load multiple conditional models ==========")
-        assert len(config.model_type_list) == len(target_vec) == len(alpha_vec), \
+        assert len(config.cond_model_type) == len(target_vec) == len(alpha_vec), \
             "The number of models, targets, and alphas must match."
         batch_forward_fns = []
 
-        for model_type, target_type in zip(config.model_type_list, config.target_type):
+        for model_type, target_type in zip(config.cond_model_type, config.target_type):
             cond_model_forward_fn = load_property_model(model_type)
             
             batch_forward_fn = make_forward_fn(cond_model_forward_fn)
