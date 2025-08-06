@@ -20,9 +20,5 @@ test*
 target/**
 !target/.gitkeep
 
-# do not upload model
-model/**/
-cond_model/**/
-
 # uv
 uv.lock
