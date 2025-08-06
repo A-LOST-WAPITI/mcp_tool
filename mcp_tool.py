@@ -162,8 +162,8 @@ def sound_forward(model_forward_fn_list, struc_list: Sequence[Structure]):
     ]
 
     log_G, log_K = [forward_fn(struc_list) for forward_fn in model_forward_fn_list]
-    G_Pa = np.exp(log_G) * 1e9  # GPa to Pa
-    K_Pa = np.exp(log_K) * 1e9  # GPa to Pa
+    G_Pa = 10 ** log_G * 1e9  # GPa to Pa
+    K_Pa = 10 ** log_K * 1e9  # GPa to Pa
 
     # Longitudinal velocity
     v_L = np.sqrt((K_Pa + (4/3) * G_Pa) / density)
