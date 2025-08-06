@@ -38,9 +38,9 @@ def make_cond_forward_fn(batch_forward_fn, target_type: str = 'equal'):
     if target_type == 'equal':
         diff = lambda preds, target: np.abs(preds - target)
     elif target_type == 'greater':
-        diff = lambda preds, target: np.clip(preds - target, 0, None)
-    elif target_type == 'less':
         diff = lambda preds, target: np.clip(target - preds, 0, None)
+    elif target_type == 'less':
+        diff = lambda preds, target: np.clip(preds - target, 0, None)
     elif target_type == 'minimize':
         diff = lambda preds, eps: (preds ** 2) + 1.0 / (preds + eps)  # avoid division by zero
     else:
@@ -125,12 +125,14 @@ def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarra
         N_max    = max(len(s) for s in strucs)
         coords   = np.zeros((B, N_max, 3), dtype=np.float32)        # pad 0
         lattice  = np.zeros((B, 3, 3),     dtype=np.float32)        # one per struct
-        atom_Z   = np.full((B, N_max), -1, dtype=np.int32)          # pad –1
+        atom_Z   = np.full((B, N_max), 0, dtype=np.int32)           # pad 0
         for i, s in enumerate(strucs):
             n = natoms[i]
             coords[i, :n] = s.cart_coords
             atom_Z[i, :n] = s.atomic_numbers
             lattice[i]    = s.lattice.matrix
+
+        atom_Z -= 1  # convert to 0-based indexing
         
         result_size_raito = natoms / N_max
         return coords, lattice, atom_Z, result_size_raito
@@ -138,6 +140,7 @@ def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarra
     cart_coords, lattice, atom_Z, result_size_raito = _pad_batch_structures(struc_list)
 
     # forward pass
+    n_struc = len(struc_list)
     with torch.no_grad():
         torch.cuda.empty_cache()
         output = model.eval(
@@ -145,7 +148,7 @@ def simple_property_forward(model, struc_list: Sequence[Structure]) -> np.ndarra
             lattice,
             atom_Z,
             mixed_type=True
-        )[0].reshape(-1) / result_size_raito
+        )[0].reshape(n_struc, -1)[:, 0] / result_size_raito
 
     # sync
     torch.cuda.synchronize()
@@ -173,7 +176,7 @@ def sound_forward(model_forward_fn_list, struc_list: Sequence[Structure]):
     return v_m
 
 def load_property_model(model_type: str):
-    base_model_dir = '/opt/agents/thermal_properties/models/'
+    base_dir = '/opt/agents/'
     ava_model_dict = {
         'simple': [
             'bandgap',
@@ -188,7 +191,11 @@ def load_property_model(model_type: str):
     }
 
     if model_type in ava_model_dict['simple']:
-        model_dir = f'{base_model_dir}{model_type}/'
+        if model_type.endswith("pressure"):
+            model_dir = f'{base_dir}/superconductor/models/{model_type}/'
+        else:
+            model_dir = f'{base_dir}/thermal_properties/models/{model_type}/'
+
         model_file = f'{model_dir}/{os.listdir(model_dir)[0]}'
         if model_type == 'high_pressure':
             model = DeepProperty(model_file, auto_batch_size=True, head='tc')
