@@ -123,11 +123,11 @@ def generate_crystalformer_structures(
         output_path = Path("outputs")
         if output_path.exists():
             shutil.rmtree(output_path)
-            shutil.copytree(cal_output_path, output_path)
-            return {
-                "poscar_paths": output_path,
-                "message": "CrystalFormer structure generation successfully!"
-            }
+        shutil.copytree(cal_output_path, output_path)
+        return {
+            "poscar_paths": output_path,
+            "message": "CrystalFormer structure generation successfully!"
+        }
 
     except Exception:
         return {
