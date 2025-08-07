@@ -382,6 +382,10 @@ def get_args():
                         help='Final MCMC temperature')
     parser.add_argument('--decay_step', type=int, default=10,
                         help='MCMC temperature decay steps')
+    
+    # Output
+    parser.add_argument('--output_path', type=str, default='./outputs',
+                        help='Path to save generated structures')
 
     args = parser.parse_args()
     return vars(args)
@@ -448,9 +452,9 @@ if __name__ == "__main__":
 
     struc_list = list(map(revert, G, L, XYZ, A, W))
 
-    if not exists("target"):
-        os.makedirs("target")
+    if not exists(config.output_path):
+        os.makedirs(config.output_path)
     for (idx, sorted_idx) in enumerate(sorted_idx_vec):
         struc = struc_list[sorted_idx]
         struc.sort()
-        struc.to("target/POSCAR_{}".format(idx + 1))
+        struc.to("{}/POSCAR_{}".format(config.output_path, idx + 1))
