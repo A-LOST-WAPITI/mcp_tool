@@ -100,10 +100,7 @@ def generate_crystalformer_structures(
 
         # activate uv
         workdir = Path('/opt/agents/crystalformer')
-        output_path = workdir / 'outputs'
-
-        if output_path.exists():
-            shutil.rmtree(output_path)
+        cal_output_path = workdir / 'outputs'
 
         mode = 'multi' if len(cond_model_type) > 1 else 'single'
 
@@ -119,14 +116,19 @@ def generate_crystalformer_structures(
             '--init_sample_num', init_sample_num,
             '--random_spacegroup_num', random_spacegroup_num,
             '--mc_steps', mc_steps,
-            '--output_path', str(output_path)
+            '--output_path', str(cal_output_path)
         ]
         subprocess.run(cmd, cwd=workdir, check=True)
-        
-        return {
-            'poscar_paths': output_path,
-            'message': 'CrystalFormer structure generation successfully!'
-        }
+
+        output_path = Path("outputs")
+        if output_path.exists():
+            shutil.rmtree(output_path)
+            shutil.copytree(cal_output_path, output_path)
+            return {
+                "poscar_paths": output_path,
+                "message": "CrystalFormer structure generation successfully!"
+            }
+
     except Exception:
         return {
             'poscar_paths': None,
