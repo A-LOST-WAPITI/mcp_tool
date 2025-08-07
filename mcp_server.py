@@ -72,7 +72,7 @@ def generate_crystalformer_structures(
     Args:
         cond_model_type (List[str]): List of conditional model types (e.g., 'bandgap', 'shear_modulus', 'bulk_modulus', 'ambient_pressure', 'high_pressure', 'sound').
         target_values (List[float]): Target values for the properties.
-        target_type (List[str]): Type of target values ('equal', 'greater', 'less', 'minimize').
+        target_type (List[str]): Type of target values ('equal', 'greater', 'less', 'minimize'). Notably, when using 'minimize', the target value should be a small value to avoid diving zero.
         alpha (List[float]): Alpha values for different values.
         space_group_min (int): Minimum space group number.
         random_spacegroup_num (int): Number of random space groups to consider.
