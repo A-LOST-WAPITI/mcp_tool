@@ -106,16 +106,16 @@ def generate_crystalformer_structures(
 
         cmd = [
             'uv', 'run', 'python',
-            'crystalformer_mcp.py',
+            'mcp_tool.py',
             '--mode', mode,
             '--cond_model_type', *cond_model_type,
-            '--target', *target_values,
+            '--target', *[str(item) for item in target_values],
             '--target_type', *target_type,
-            '--alpha', *alpha,
-            '--spacegroup', space_group_min,
-            '--init_sample_num', init_sample_num,
-            '--random_spacegroup_num', random_spacegroup_num,
-            '--mc_steps', mc_steps,
+            '--alpha', *[str(item) for item in alpha],
+            '--spacegroup', str(space_group_min),
+            '--init_sample_num', str(init_sample_num),
+            '--random_spacegroup_num', str(random_spacegroup_num),
+            '--mc_steps', str(mc_steps),
             '--output_path', str(cal_output_path)
         ]
         subprocess.run(cmd, cwd=workdir, check=True)
