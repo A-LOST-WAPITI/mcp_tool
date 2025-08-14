@@ -420,7 +420,7 @@ def build_surface_interface(
 
 # ================ Tool to generate structures with conditional properties via CrystalFormer ===================
 @mcp.tool()
-def generate_crystalformer_structures(
+def generate_crystalformer_structures_general(
     cond_model_type: List[str],
     target_values: List[float],
     target_type: List[str],
