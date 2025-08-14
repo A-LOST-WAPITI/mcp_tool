@@ -8,6 +8,8 @@ from typing_extensions import TypedDict
 import numpy as np
 
 import shutil
+from random import randint
+import json
 
 import argparse
 
@@ -29,7 +31,7 @@ logging.basicConfig(
 def parse_args():
     '''
     Parse command line arguments for MCP server.
-    
+
     Returns:
         argparse.Namespace: Parsed command line arguments with port, host, and log_level.
     '''
@@ -102,10 +104,10 @@ def build_bulk_structure(
     def _prim2conven(ase_atoms: Atoms) -> Atoms:
         '''
         Convert a primitive cell (ASE Atoms) to a conventional standard cell using pymatgen.
-        
+
         Args:
             ase_atoms (ase.Atoms): Input primitive cell structure.
-            
+
         Returns:
             ase.Atoms: Conventional standard cell structure.
         '''
@@ -117,7 +119,8 @@ def build_bulk_structure(
 
     try:
         if a is None:
-            raise ValueError('Lattice constant \'a\' must be provided for all crystal structures.')
+            raise ValueError(
+                'Lattice constant \'a\' must be provided for all crystal structures.')
 
         from ase.build import bulk
         special_params = {}
@@ -156,7 +159,8 @@ def build_bulk_structure(
 @mcp.tool()
 def build_molecule_structure(
     molecule_name: str,
-    cell: Optional[List[List[float]]] = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+    cell: Optional[List[List[float]]] = [
+        [10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
     vacuum: Optional[float] = 5.0,
     output_file: str = 'structure_molecule.cif'
 ) -> StructureResult:
@@ -192,7 +196,7 @@ def build_molecule_structure(
         StructureResult: Dictionary containing:
             - structure_paths (Path): Path to the generated structure file
             - message (str): Success or error message
-            
+
     Note:
         For G2 database molecules, the molecule is placed in the specified cell and centered 
         with the given vacuum spacing. For single elements, a single atom is placed at the 
@@ -203,8 +207,9 @@ def build_molecule_structure(
             atoms = molecule(molecule_name)
             atoms.set_cell(cell)
             atoms.center(vacuum=vacuum)
-        elif molecule_name in chemical_symbols and molecule_name != "X":
-            atoms = Atoms(symbol=molecule_name, positions=[[0, 0, 0]], cell=cell)
+        elif molecule_name in chemical_symbols and molecule_name != 'X':
+            atoms = Atoms(symbol=molecule_name, positions=[
+                          [0, 0, 0]], cell=cell)
 
         write(output_file, atoms)
         logging.info(f'Molecule structure saved to: {output_file}')
@@ -294,12 +299,12 @@ def build_surface_adsorbate(
     def _fractional_to_cartesian_2d(atoms, frac_xy, z=0.0):
         '''
         Convert fractional coordinates to cartesian coordinates in 2D.
-        
+
         Args:
             atoms (ase.Atoms): ASE Atoms object containing the unit cell.
             frac_xy (List[float]): Fractional coordinates [x, y] in the range [0, 1].
             z (float): Z-coordinate (not used in 2D conversion). Default 0.0.
-            
+
         Returns:
             numpy.ndarray: Cartesian coordinates [x, y] in Ångströms.
         '''
@@ -418,7 +423,223 @@ def build_surface_interface(
             'message': f'Interface structure building failed: {str(e)}'
         }
 
+# ================ Tool to generate structures with CALYPSO ===================
+
+
+@mcp.tool()
+def generate_calypso_structures(
+    species: List[str],
+    n_tot: int
+) -> StructureResult:
+    '''
+    Generate crystal structures using CALYPSO with specified chemical species.
+    
+    CALYPSO is a crystal structure prediction software that generates stable crystal 
+    configurations through evolutionary algorithms and particle swarm optimization.
+
+    Args:
+        species (List[str]): List of chemical element symbols (e.g., ['Mg', 'O', 'Si']). 
+            These elements will be used as building blocks in structure generation.
+            All element symbols must be supported by the internal element property database.
+        n_tot (int): Number of CALYPSO structure configurations to generate. Each structure 
+            will be created in a separate subdirectory and then collected into the final output.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Directory path containing generated POSCAR files 
+              (outputs/poscars_for_optimization/)
+            - message (str): Success or error message with generation details
+            
+    Note:
+        - Generated structures are saved as POSCAR_0, POSCAR_1, etc. in the output directory
+        - Each structure undergoes internal screening and optimization
+        - If species or n_tot are not provided, users will be reminded to supply this information
+        - Intermediate files are cleaned up, keeping only input.dat and final POSCAR files
+    '''
+
+    def get_props(s_list):
+        '''
+        Get atomic properties for specified chemical elements.
+        
+        Reads element properties from calypso_elem_prop.json file including
+        atomic number, atomic radius, and atomic volume.
+
+        Args:
+            s_list (List[str]): List of element symbols to get properties for.
+
+        Returns:
+            Tuple[List[int], List[float], List[float]]: 
+                - z_list: Atomic numbers for given species
+                - r_list: Atomic radii for given species 
+                - v_list: Atomic volumes for given species
+                
+        Raises:
+            ValueError: If any element in s_list is not supported.
+        '''
+
+        with open('calypso_elem_prop.json', 'r') as io:
+            elem_props = json.load(io)
+        
+        z_list, r_list, v_list = [], [], []
+        for s in s_list:
+            if s not in elem_props:
+                raise ValueError(f'Unsupported element: {s}')
+            props = elem_props[s]
+            z_list.append(props['Z'])
+            r_list.append(props['r'])
+            v_list.append(props['v'])
+        return z_list, r_list, v_list
+
+    def generate_counts(n):
+        '''
+        Generate random atom counts for each species.
+        
+        Args:
+            n (int): Number of species to generate counts for.
+            
+        Returns:
+            List[int]: List of atom counts (currently fixed at 4 for each species).
+        '''
+        return [randint(4, 4) for _ in range(n)]
+
+    def write_input(path, species, z_list, n_list, r_mat, volume):
+        '''
+        Write CALYPSO input files for structure generation.
+        
+        Creates input.dat file with all necessary CALYPSO parameters including
+        species information, distance matrix, volume, and calculation settings.
+
+        Args:
+            path (Path): Directory path to save the input file.
+            species (List[str]): List of element symbols.
+            z_list (List[int]): List of atomic numbers corresponding to species.
+            n_list (List[int]): List of atom counts for each species.
+            r_mat (numpy.ndarray): Radius matrix for distance calculations.
+            volume (float): Total volume for the unit cell.
+            
+        Note:
+            - Species are automatically sorted by atomic number
+            - Input file includes fixed CALYPSO calculation parameters
+            - Distance matrix is written in @DistanceOfIon section
+        '''
+
+        # Step 1: reorder all based on atomic number
+        sorted_indices = sorted(range(len(z_list)), key=lambda i: z_list[i])
+        species = [species[i] for i in sorted_indices]
+        z_list = [z_list[i] for i in sorted_indices]
+        n_list = [n_list[i] for i in sorted_indices]
+        r_mat = r_mat[np.ix_(sorted_indices, sorted_indices)]  # reorder matrix
+
+        # Step 2: write input.dat
+        with open(path / 'input.dat', 'w') as f:
+            f.write(f'SystemName = {' '.join(species)}\n')
+            f.write(f'NumberOfSpecies = {len(species)}\n')
+            f.write(f'NameOfAtoms = {' '.join(species)}\n')
+            f.write('@DistanceOfIon\n')
+            for i in range(len(species)):
+                row = ' '.join(
+                    f'{r_mat[i][j]:.3f}' for j in range(len(species)))
+                f.write(row + '\n')
+            f.write('@End\n')
+            f.write(f'Volume = {volume:.2f}\n')
+            f.write(f'AtomicNumber = {' '.join(str(z) for z in z_list)}\n')
+            f.write(f'NumberOfAtoms = {' '.join(str(n) for n in n_list)}\n')
+            f.write('''Ialgo = 2
+PsoRatio = 0.5
+PopSize = 1
+GenType = 1
+ICode = 15
+NumberOfLbest = 4
+NumberOfLocalOptim = 3
+Command = sh submit.sh
+MaxTime = 9000
+MaxStep = 1
+PickUp = F
+PickStep = 1
+Parallel = F
+NumberOfParallel = 4
+Split = T
+PSTRESS = 2000
+fmax = 0.01
+FixCell = F
+''')
+
+    # ===== Step 1: Generate calypso input files ==========
+    outdir = Path('generated_calypso')
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    z_list, r_list, v_list = get_props(species)
+    for i in range(n_tot):
+        try:
+            n_list = generate_counts(len(species))
+            volume = sum(n * v for n, v in zip(n_list, v_list))
+            r_mat = np.add.outer(r_list, r_list) * 0.529  # bohr → Å
+
+            struct_dir = outdir / f'{i}'
+            if not struct_dir.exists():
+                struct_dir.mkdir(parents=True, exist_ok=True)
+
+            # Prepare calypso input.dat
+            write_input(struct_dir, species, z_list, n_list, r_mat, volume)
+        except Exception as e:
+            return {
+                'poscar_paths': None,
+                'message': 'Input files generations for calypso failed!'
+            }
+
+        # Execuate calypso calculation and screening
+        flim_ase_path = Path(
+            '/opt/agents/thermal_properties/flim_ase/flim_ase.py')
+        command = f'/opt/agents/thermal_properties/calypso/calypso.x >> tmp_log && python {flim_ase_path}'
+        if not flim_ase_path.exists():
+            return {
+                'poscar_paths': None,
+                'message': 'flim_ase.py did not found!'
+
+            }
+        try:
+            subprocess.run(command, cwd=struct_dir, shell=True)
+        except Exception as e:
+            return {
+                'poscar_paths': None,
+                'message': 'calypso.x execute failed!'
+            }
+
+        # Clean struct_dir only save input.dat and POSCAR_1
+        for file in struct_dir.iterdir():
+            if file.name not in ['input.dat', 'POSCAR_1']:
+                if file.is_file():
+                    file.unlink()
+                elif file.is_dir():
+                    shutil.rmtree(file)
+
+    # Step 3: Collect POSCAR_1 into POSCAR_n format
+    try:
+        output_dir = Path('outputs')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        final_dir = output_dir / 'poscars_for_optimization'
+        final_dir.mkdir(parents=True, exist_ok=True)
+        counter = 0
+        for struct_dir in outdir.iterdir():
+            poscar_path = struct_dir / 'POSCAR_1'
+            if poscar_path.exists():
+                new_name = final_dir / f'POSCAR_{counter}'
+                shutil.copy(poscar_path, new_name)
+                counter += 1
+
+        return {
+            'structure_paths': Path(final_dir),
+            'message': f'Calypso generated {n_tot} structures with {species} successfully!'
+        }
+    except Exception as e:
+        return {
+            'structure_paths': None,
+            'message': 'Calypso generated POSCAR files collected failed!'
+        }
+
 # ================ Tool to generate structures with conditional properties via CrystalFormer ===================
+
+
 @mcp.tool()
 def generate_crystalformer_structures(
     cond_model_type: List[str],
@@ -432,7 +653,7 @@ def generate_crystalformer_structures(
 ) -> StructureResult:
     '''
     Generate crystal structures using CrystalFormer with specified conditional properties.
-    
+
     Args:
         cond_model_type (List[str]): List of conditional model types. Supported types:
             'bandgap', 'shear_modulus', 'bulk_modulus', 'ambient_pressure', 'high_pressure', 'sound'.
@@ -450,7 +671,7 @@ def generate_crystalformer_structures(
         StructureResult: Dictionary containing:
             - structure_paths (Path): Directory path containing generated structure files
             - message (str): Success or error message
-            
+
     Note:
         All input lists (cond_model_type, target_values, target_type, alpha) must have 
         the same length for consistency in multi-objective optimization.
