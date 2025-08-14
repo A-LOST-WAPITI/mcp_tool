@@ -157,6 +157,55 @@ def build_bulk_structure(
             'structure_paths': None,
             'message': f'Bulk structure building failed: {str(e)}'
         }
+    
+
+@mcp.tool()
+def make_supercell_structure(
+    structure_path: Path,
+    supercell_matrix: list[int] = [1, 1, 1],
+    output_file: str = 'structure_supercell.cif'
+) -> StructureResult:
+    '''
+    Generate a supercell from an existing atomic structure using ASE.
+
+    Creates a supercell by repeating the input structure along the three lattice 
+    directions according to the specified supercell matrix. This is useful for 
+    creating larger simulation cells or studying periodic boundary effects.
+
+    Args:
+        structure_path (Path): Path to input structure file. Supports various formats 
+            including CIF, POSCAR, XYZ, etc.
+        supercell_matrix (list[int]): List of three integers [nx, ny, nz] specifying 
+            the number of repetitions along each lattice vector (a, b, c). 
+            Default [1, 1, 1] (no supercell expansion).
+        output_file (str): Path to save the generated supercell structure file. 
+            Default 'structure_supercell.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Path to the generated supercell structure file
+            - message (str): Success or error message with supercell matrix details
+            
+    Note:
+        The supercell will have dimensions (nx × ny × nz) times the original unit cell,
+        where nx, ny, nz are the values in supercell_matrix. Total number of atoms
+        will be multiplied by (nx × ny × nz).
+    '''
+    try:
+        atoms = read(str(structure_path))
+        supercell_atoms = atoms.repeat(supercell_matrix)
+        write(output_file, supercell_atoms)
+        logging.info(f'Supercell structure saved to: {output_file}')
+        return {
+            'structure_paths': Path(output_file),
+            'message': f'Supercell structure generated successfully with matrix {supercell_matrix}.'
+        }
+    except Exception as e:
+        logging.error(f'Supercell generation failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': None,
+            'message': f'Supercell generation failed: {str(e)}'
+        }
 
 
 @mcp.tool()
