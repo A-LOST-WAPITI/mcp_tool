@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Literal, Union
 from pathlib import Path
 import logging
 import shutil
@@ -11,6 +11,14 @@ import shutil
 
 import argparse
 
+from ase import Atoms
+from ase.collections import g2
+from ase.data import chemical_symbols
+from ase.io import read, write
+from ase.build import add_adsorbate, add_vacuum, bulk, molecule, surface, stack
+from pymatgen.analysis.structure_analyzer import SpacegroupAnalyzer
+from pymatgen.io.ase import AseAtomsAdaptor
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -19,15 +27,20 @@ logging.basicConfig(
 
 
 def parse_args():
-    '''Parse command line arguments for MCP server.'''
+    '''
+    Parse command line arguments for MCP server.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments with port, host, and log_level.
+    '''
     parser = argparse.ArgumentParser(description='DPA Calculator MCP Server')
     parser.add_argument('--port', type=int, default=50001,
                         help='Server port (default: 50001)')
     parser.add_argument('--host', default='0.0.0.0',
                         help='Server host (default: 0.0.0.0)')
     parser.add_argument('--log-level', default='INFO',
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level (default: INFO)')
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Logging level (default: INFO)')
     try:
         args = parser.parse_args()
     except SystemExit:
@@ -50,12 +63,362 @@ mcp = CalculationMCPServer(
 )
 
 
-# ================ Tool to generate structures with conditional properties via CrystalFormer ===================
-class GenerateCryFormerStructureResult(TypedDict):
-    poscar_paths: Path
+class StructureResult(TypedDict):
+    structure_paths: Union[Path, None]
     message: str
 
+# ================ Tool to build structures via ASE ===================
 
+
+@mcp.tool()
+def build_bulk_structure(
+    element: str,
+    conventional: bool = True,
+    crystal_structure: Literal['sc', 'fcc', 'bcc', 'hcp',
+                               'diamond', 'zincblende', 'rocksalt'] = 'fcc',
+    a: Optional[float] = None,
+    c: Optional[float] = None,
+    alpha: Optional[float] = None,
+    output_file: str = 'structure_bulk.cif'
+) -> StructureResult:
+    '''
+    Build a bulk crystal structure using ASE.
+
+    Args:
+        element (str): Element symbol or chemical formula.
+        conventional (bool): If True, convert to conventional standard cell. Default True.
+        crystal_structure (str): Crystal structure type. Must be one of 'sc', 'fcc', 'bcc', 
+            'hcp', 'diamond', 'zincblende', 'rocksalt'. Default 'fcc'.
+        a (Optional[float]): Lattice parameter 'a' in Ångströms. Required for all structures.
+        c (Optional[float]): Lattice parameter 'c' in Ångströms. Used for hcp structures.
+        alpha (Optional[float]): Lattice angle alpha in degrees.
+        output_file (str): Path to save the CIF file. Default 'structure_bulk.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_path (Path): Path to the generated structure file
+            - message (str): Success or error message
+    '''
+    def _prim2conven(ase_atoms: Atoms) -> Atoms:
+        '''
+        Convert a primitive cell (ASE Atoms) to a conventional standard cell using pymatgen.
+        
+        Args:
+            ase_atoms (ase.Atoms): Input primitive cell structure.
+            
+        Returns:
+            ase.Atoms: Conventional standard cell structure.
+        '''
+        structure = AseAtomsAdaptor.get_structure(ase_atoms)
+        analyzer = SpacegroupAnalyzer(structure, symprec=1e-3)
+        conven_structure = analyzer.get_conventional_standard_structure()
+        conven_atoms = AseAtomsAdaptor.get_atoms(conven_structure)
+        return conven_atoms
+
+    try:
+        if a is None:
+            raise ValueError('Lattice constant \'a\' must be provided for all crystal structures.')
+
+        from ase.build import bulk
+        special_params = {}
+
+        if crystal_structure == 'hcp':
+            if c is not None:
+                special_params['c'] = c
+            special_params['orthorhombic'] = True
+        elif crystal_structure in ['fcc', 'bcc', 'diamond', 'zincblende']:
+            special_params['cubic'] = True
+
+        atoms = bulk(
+            element,
+            crystal_structure,
+            a=a, alpha=alpha,
+            **special_params
+        )
+        if conventional:
+            atoms = _prim2conven(atoms)
+        write(output_file, atoms)
+
+        logging.info(f'Bulk structure saved to: {output_file}')
+        return {
+            'structure_path': Path(output_file),
+            'message': f'Bulk structure {crystal_structure} for {element} built successfully.'
+        }
+    except Exception as e:
+        logging.error(
+            f'Bulk structure building failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': None,
+            'message': f'Bulk structure building failed: {str(e)}'
+        }
+
+
+@mcp.tool()
+def build_molecule_structure(
+    molecule_name: str,
+    cell: Optional[List[List[float]]] = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+    vacuum: Optional[float] = 5.0,
+    output_file: str = 'structure_molecule.cif'
+) -> StructureResult:
+    '''
+    Build a molecule structure using ASE with specified unit cell and vacuum.
+
+    Args:
+        molecule_name (str): Name of the molecule or element symbol. Supports:
+            - ASE G2 database molecules: PH3, P2, CH3CHO, H2COH, CS, OCHCHO, C3H9C, 
+              CH3COF, CH3CH2OCH3, HCOOH, HCCl3, HOCl, H2, SH2, C2H2, C4H4NH, CH3SCH3, 
+              SiH2_s3B1d, CH3SH, CH3CO, CO, ClF3, SiH4, C2H6CHOH, CH2NHCH2, isobutene, 
+              HCO, bicyclobutane, LiF, Si, C2H6, CN, ClNO, S, SiF4, H3CNH2, 
+              methylenecyclopropane, CH3CH2OH, F, NaCl, CH3Cl, CH3SiH3, AlF3, C2H3, 
+              ClF, PF3, PH2, CH3CN, cyclobutene, CH3ONO, SiH3, C3H6_D3h, CO2, NO, 
+              trans-butane, H2CCHCl, LiH, NH2, CH, CH2OCH2, C6H6, CH3CONH2, cyclobutane, 
+              H2CCHCN, butadiene, C, H2CO, CH3COOH, HCF3, CH3S, CS2, SiH2_s1A1d, C4H4S, 
+              N2H4, OH, CH3OCH3, C5H5N, H2O, HCl, CH2_s1A1d, CH3CH2SH, CH3NO2, Cl, Be, 
+              BCl3, C4H4O, Al, CH3O, CH3OH, C3H7Cl, isobutane, Na, CCl4, CH3CH2O, 
+              H2CCHF, C3H7, CH3, O3, P, C2H4, NCCN, S2, AlCl3, SiCl4, SiO, C3H4_D2d, 
+              H, COF2, 2-butyne, C2H5, BF3, N2O, F2O, SO2, H2CCl2, CF3CN, HCN, C2H6NH, 
+              OCS, B, ClO, C3H8, HF, O2, SO, NH, C2F4, NF3, CH2_s3B1d, CH3CH2Cl, 
+              CH3COCl, NH3, C3H9N, CF4, C3H6_Cs, Si2H6, HCOOCH3, O, CCH, N, Si2, 
+              C2H6SO, C5H8, H2CF2, Li2, CH2SCH2, C2Cl4, C3H4_C3v, CH3COCH3, F2, CH4, 
+              SH, H2CCO, CH3CH2NH2, Li, N2, Cl2, H2O2, Na2, BeH, C3H4_C2v, NO2
+            - Element symbols from periodic table (e.g., 'H', 'He', 'Li', etc.)
+        cell (Optional[List[List[float]]]): Unit cell matrix in Ångströms as 3x3 list. 
+            Default [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]] (cubic 10 Å cell).
+        vacuum (Optional[float]): Vacuum spacing around the molecule in Ångströms. 
+            Applied when centering the molecule in the cell. Default 5.0.
+        output_file (str): Path to save the CIF structure file. Default 'structure_molecule.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Path to the generated structure file
+            - message (str): Success or error message
+            
+    Note:
+        For G2 database molecules, the molecule is placed in the specified cell and centered 
+        with the given vacuum spacing. For single elements, a single atom is placed at the 
+        origin within the specified cell.
+    '''
+    try:
+        if molecule_name in g2.names:
+            atoms = molecule(molecule_name)
+            atoms.set_cell(cell)
+            atoms.center(vacuum=vacuum)
+        elif molecule_name in chemical_symbols and molecule_name != "X":
+            atoms = Atoms(symbol=molecule_name, positions=[[0, 0, 0]], cell=cell)
+
+        write(output_file, atoms)
+        logging.info(f'Molecule structure saved to: {output_file}')
+        return {
+            'structure_paths': Path(output_file),
+            'message': f'Molecule structure {molecule_name} built successfully.'
+        }
+    except Exception as e:
+        logging.error(
+            f'Molecule structure building failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': None,
+            'message': f'Molecule structure building failed: {str(e)}'
+        }
+
+
+@mcp.tool()
+def build_surface_slab(
+    material_path: Path = None,
+    miller_index: List[int] = (1, 0, 0),
+    layers: int = 4,
+    vacuum: float = 10.0,
+    output_file: str = 'structure_slab.cif'
+) -> StructureResult:
+    '''
+    Build a surface slab structure using ASE.
+
+    Args:
+        material_path (Path): Path to existing bulk structure file.
+        miller_index (List[int]): Miller indices as list of 3 integers (h, k, l). Default (1, 0, 0).
+        layers (int): Number of atomic layers in the slab. Default 4.
+        vacuum (float): Vacuum spacing above and below the slab in Ångströms. Default 10.0.
+        output_file (str): Path to save the CIF file. Default 'structure_slab.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Path to the generated structure file
+            - message (str): Success or error message
+    '''
+    try:
+        bulk_atoms = read(str(material_path))
+        slab = surface(bulk_atoms, miller_index, layers)
+        slab.center(vacuum=vacuum, axis=2)
+        write(output_file, slab)
+        logging.info(f'Surface structure saved to: {output_file}')
+        return {
+            'structure_paths': Path(output_file),
+            'message': 'Surface slab structure built successfully!'
+        }
+    except Exception as e:
+        logging.error(
+            f'Surface structure building failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': Path(''),
+            'message': f'Surface structure building failed: {str(e)}'
+        }
+
+
+@mcp.tool()
+def build_surface_adsorbate(
+    surface_path: Path = None,
+    adsorbate_path: Path = None,
+    shift: Optional[Union[List[float], str]] = [0.5, 0.5],
+    height: Optional[float] = 2.0,
+    output_file: str = 'structure_adsorbate.cif'
+) -> StructureResult:
+    '''
+    Build a surface-adsorbate structure using ASE.
+
+    Args:
+        surface_path (Path): Path to existing surface slab structure file.
+        adsorbate_path (Path): Path to existing adsorbate molecule structure file.
+        shift (Optional[Union[List[float], str]]): Position of adsorbate on surface. 
+            Can be:
+            - None: Center of the surface unit cell
+            - [x, y]: Fractional coordinates (0-1) within the surface cell
+            - str: ASE keyword site ('ontop', 'fcc', 'hcp', 'bridge', etc.)
+            Default [0.5, 0.5].
+        height (Optional[float]): Height of adsorbate above surface in Ångströms. Default 2.0.
+        output_file (str): Path to save the CIF file. Default 'structure_adsorbate.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Path to the generated structure file
+            - message (str): Success or error message
+    '''
+    def _fractional_to_cartesian_2d(atoms, frac_xy, z=0.0):
+        '''
+        Convert fractional coordinates to cartesian coordinates in 2D.
+        
+        Args:
+            atoms (ase.Atoms): ASE Atoms object containing the unit cell.
+            frac_xy (List[float]): Fractional coordinates [x, y] in the range [0, 1].
+            z (float): Z-coordinate (not used in 2D conversion). Default 0.0.
+            
+        Returns:
+            numpy.ndarray: Cartesian coordinates [x, y] in Ångströms.
+        '''
+        frac = np.array([frac_xy[0], frac_xy[1], z])
+        cell = atoms.get_cell()  # shape (3, 3)
+        cart = np.dot(frac, cell)  # shape (3,)
+        return cart[:2]
+
+    try:
+        slab = read(str(surface_path))
+        adsorbate_atoms = read(str(adsorbate_path))
+
+        # Determine adsorbate shift & height
+        if isinstance(shift, str):
+            pos = shift
+        elif isinstance(shift, (list, tuple)) and len(shift) == 2:
+            pos = _fractional_to_cartesian_2d(slab, shift)
+        else:
+            raise ValueError(
+                '`shift` must be None, keyword site, or [x, y] coordinates')
+
+        add_adsorbate(slab, adsorbate_atoms, height, position=pos)
+
+        write(output_file, slab)
+        logging.info(f'Surface-adsorbate structure saved to: {output_file}')
+        return {
+            'structure_paths': Path(output_file),
+            'message': 'Surface-adsorbate structure built successfully!'
+        }
+    except Exception as e:
+        logging.error(
+            f'Surface structure building failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': Path(''),
+            'message': f'Surface structure building failed: {str(e)}'
+        }
+
+
+@mcp.tool()
+def build_surface_interface(
+    material1_path: Path = None,
+    material2_path: Path = None,
+    stack_axis: int = 2,
+    interface_distance: float = 2.5,
+    max_strain: float = 0.2,
+    output_file: str = 'structure_interface.cif'
+) -> StructureResult:
+    '''
+    Build an interface between two slab structures with lattice matching and strain checking.
+
+    Args:
+        material1_path (Path): Path to the first slab structure file.
+        material2_path (Path): Path to the second slab structure file.
+        stack_axis (int): Axis along which slabs are stacked (0=x, 1=y, 2=z). Default 2.
+        interface_distance (float): Distance between the two slabs in Ångströms. Default 2.5.
+        max_strain (float): Maximum allowed relative lattice mismatch in in-plane directions. 
+            Default 0.2 (20%).
+        output_file (str): Path to save the CIF file. Default 'structure_interface.cif'.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Path to the generated structure file
+            - message (str): Success or error message
+    '''
+    try:
+        # Read structures
+        slab1 = read(str(material1_path))
+        slab2 = read(str(material2_path))
+
+        # Determine in-plane axes
+        axes = [0, 1, 2]
+        if stack_axis not in axes:
+            raise ValueError(
+                f'Invalid stack_axis={stack_axis}. Must be 0, 1, or 2.')
+        axis1, axis2 = [ax for ax in axes if ax != stack_axis]
+
+        # Lattice vector lengths
+        len1_a = np.linalg.norm(slab1.cell[axis1])
+        len1_b = np.linalg.norm(slab1.cell[axis2])
+        len2_a = np.linalg.norm(slab2.cell[axis1])
+        len2_b = np.linalg.norm(slab2.cell[axis2])
+
+        # Strain calculation
+        strain_a = abs(len1_a - len2_a) / ((len1_a + len2_a) / 2)
+        strain_b = abs(len1_b - len2_b) / ((len1_b + len2_b) / 2)
+
+        if strain_a > max_strain or strain_b > max_strain:
+            raise ValueError(
+                f'Lattice mismatch too large:\n'
+                f'  - Axis {axis1}: strain = {strain_a:.3f}\n'
+                f'  - Axis {axis2}: strain = {strain_b:.3f}\n'
+                f'Max allowed: {max_strain:.3f}'
+            )
+
+        # Stack the slabs using ASE
+        interface = stack(
+            slab1, slab2,
+            axis=stack_axis,
+            maxstrain=max_strain,
+            distance=interface_distance
+        )
+
+        # Write to file
+        write(output_file, interface)
+        logging.info(f'Interface structure saved to: {output_file}')
+        return {
+            'structure_paths': Path(output_file),
+            'message': 'Interface structure built successfully!'
+        }
+
+    except Exception as e:
+        logging.error(
+            f'Interface structure building failed: {str(e)}', exc_info=True)
+        return {
+            'structure_paths': Path(''),
+            'message': f'Interface structure building failed: {str(e)}'
+        }
+
+# ================ Tool to generate structures with conditional properties via CrystalFormer ===================
 @mcp.tool()
 def generate_crystalformer_structures(
     cond_model_type: List[str],
@@ -66,23 +429,36 @@ def generate_crystalformer_structures(
     random_spacegroup_num: int,
     init_sample_num: int,
     mc_steps: int
-) -> GenerateCryFormerStructureResult:
+) -> StructureResult:
     '''
-    Generate structures using CrystalFormer with specified conditional properties.
+    Generate crystal structures using CrystalFormer with specified conditional properties.
+    
     Args:
-        cond_model_type (List[str]): List of conditional model types (e.g., 'bandgap', 'shear_modulus', 'bulk_modulus', 'ambient_pressure', 'high_pressure', 'sound').
-        target_values (List[float]): Target values for the properties.
-        target_type (List[str]): Type of target values ('equal', 'greater', 'less', 'minimize'). Notably, when using 'minimize', the target value should be a small value to avoid diving zero.
-        alpha (List[float]): Alpha values for different values.
-        space_group_min (int): Minimum space group number.
-        random_spacegroup_num (int): Number of random space groups to consider.
-        init_sample_num (int): Initial number of samples for each space group.
-        mc_steps (int): Number of Monte Carlo steps.
+        cond_model_type (List[str]): List of conditional model types. Supported types:
+            'bandgap', 'shear_modulus', 'bulk_modulus', 'ambient_pressure', 'high_pressure', 'sound'.
+        target_values (List[float]): Target values for each property in cond_model_type.
+        target_type (List[str]): Type of target optimization for each property. Options:
+            'equal', 'greater', 'less', 'minimize'. Note: for 'minimize', use small target values
+            to avoid division by zero.
+        alpha (List[float]): Alpha weighting values for each property in multi-objective optimization.
+        space_group_min (int): Minimum space group number to consider during generation.
+        random_spacegroup_num (int): Number of random space groups to sample.
+        init_sample_num (int): Initial number of samples to generate for each space group.
+        mc_steps (int): Number of Monte Carlo steps for structure optimization.
+
+    Returns:
+        StructureResult: Dictionary containing:
+            - structure_paths (Path): Directory path containing generated structure files
+            - message (str): Success or error message
+            
+    Note:
+        All input lists (cond_model_type, target_values, target_type, alpha) must have 
+        the same length for consistency in multi-objective optimization.
     '''
     try:
         assert len(cond_model_type) == len(target_values) == len(target_type) == len(alpha), \
             'Length of cond_model_type, target_values, target_type, and alpha must be the same.'
-        
+
         ava_cond_model = [
             'bandgap',
             'shear_modulus',
@@ -92,11 +468,13 @@ def generate_crystalformer_structures(
             'sound'
         ]
         assert np.all([model_type in ava_cond_model for model_type in cond_model_type]), \
-            'Model type must be one of the following: ' + ', '.join(ava_cond_model)
-        
+            'Model type must be one of the following: ' + \
+            ', '.join(ava_cond_model)
+
         ava_value_type = ['equal', 'greater', 'less', 'minimize']
         assert np.all([t in ava_value_type for t in target_type]), \
-            'Target type must be one of the following: ' + ', '.join(ava_value_type)
+            'Target type must be one of the following: ' + \
+            ', '.join(ava_value_type)
 
         # activate uv
         workdir = Path('/opt/agents/crystalformer')
@@ -120,18 +498,18 @@ def generate_crystalformer_structures(
         ]
         subprocess.run(cmd, cwd=workdir, check=True)
 
-        output_path = Path("outputs")
+        output_path = Path('outputs')
         if output_path.exists():
             shutil.rmtree(output_path)
         shutil.copytree(cal_output_path, output_path)
         return {
-            "poscar_paths": output_path,
-            "message": "CrystalFormer structure generation successfully!"
+            'structure_paths': output_path,
+            'message': 'CrystalFormer structure generation successfully!'
         }
 
     except Exception:
         return {
-            'poscar_paths': None,
+            'structure_paths': None,
             'message': 'CrystalFormer Execution failed!'
         }
 
