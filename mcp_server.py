@@ -1,25 +1,30 @@
-from typing import List, Optional, Literal, Union
-from pathlib import Path
+# Standard library imports
+import argparse
+import json
 import logging
 import shutil
 import subprocess
-from dp.agent.server import CalculationMCPServer
-from typing_extensions import TypedDict
-import numpy as np
-
-import shutil
+from pathlib import Path
 from random import randint
-import json
+from typing import List, Optional, Literal, Union
 
-import argparse
+# Third-party library imports
+import numpy as np
+from typing_extensions import TypedDict
 
+# ASE imports
 from ase import Atoms
+from ase.build import add_adsorbate, bulk, molecule, surface, stack
 from ase.collections import g2
 from ase.data import chemical_symbols
 from ase.io import read, write
-from ase.build import add_adsorbate, add_vacuum, bulk, molecule, surface, stack
+
+# Pymatgen imports
 from pymatgen.analysis.structure_analyzer import SpacegroupAnalyzer
 from pymatgen.io.ase import AseAtomsAdaptor
+
+# Local/custom imports
+from dp.agent.server import CalculationMCPServer
 
 # Setup logging
 logging.basicConfig(
@@ -121,10 +126,8 @@ def build_bulk_structure(
         if a is None:
             raise ValueError(
                 'Lattice constant \'a\' must be provided for all crystal structures.')
-
-        from ase.build import bulk
+        
         special_params = {}
-
         if crystal_structure == 'hcp':
             if c is not None:
                 special_params['c'] = c
