@@ -70,7 +70,7 @@ mcp = CalculationMCPServer(
 
 
 class StructureResult(TypedDict):
-    structure_paths: Union[Path, None]
+    structure_paths: Path
     message: str
 
 # ================ Tool to build structures via ASE ===================
