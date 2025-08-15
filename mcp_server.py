@@ -652,8 +652,8 @@ def generate_calypso_structures(
                 f.write(row + '\n')
             f.write('@End\n')
             f.write(f'Volume = {volume:.2f}\n')
-            f.write(f'AtomicNumber = {' '.join(str(z) for z in z_list)}\n')
-            f.write(f'NumberOfAtoms = {' '.join(str(n) for n in n_list)}\n')
+            f.write(f'AtomicNumber = {" ".join(str(z) for z in z_list)}\n')
+            f.write(f'NumberOfAtoms = {" ".join(str(n) for n in n_list)}\n')
             f.write('''Ialgo = 2
 PsoRatio = 0.5
 PopSize = 1
