@@ -642,9 +642,9 @@ def generate_calypso_structures(
 
         # Step 2: write input.dat
         with open(path / 'input.dat', 'w') as f:
-            f.write(f'SystemName = {' '.join(species)}\n')
+            f.write(f'SystemName = {" ".join(species)}\n')
             f.write(f'NumberOfSpecies = {len(species)}\n')
-            f.write(f'NameOfAtoms = {' '.join(species)}\n')
+            f.write(f'NameOfAtoms = {" ".join(species)}\n')
             f.write('@DistanceOfIon\n')
             for i in range(len(species)):
                 row = ' '.join(
