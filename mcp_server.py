@@ -808,7 +808,7 @@ def generate_crystalformer_structures(
             ', '.join(ava_value_type)
 
         # activate uv
-        workdir = Path('/opt/agents/crystalformer')
+        workdir = Path('/opt/agents/mcp_tool')
         cal_output_path = workdir / 'outputs'
 
         mode = 'multi' if len(cond_model_type) > 1 else 'single'
