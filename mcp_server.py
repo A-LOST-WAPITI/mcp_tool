@@ -314,7 +314,7 @@ def build_surface_slab(
         logging.error(
             f'Surface structure building failed: {str(e)}', exc_info=True)
         return {
-            'structure_paths': Path(''),
+            'structure_paths': None,
             'message': f'Surface structure building failed: {str(e)}'
         }
 
@@ -389,7 +389,7 @@ def build_surface_adsorbate(
         logging.error(
             f'Surface structure building failed: {str(e)}', exc_info=True)
         return {
-            'structure_paths': Path(''),
+            'structure_paths': None,
             'message': f'Surface structure building failed: {str(e)}'
         }
 
@@ -470,7 +470,7 @@ def build_surface_interface(
         logging.error(
             f'Interface structure building failed: {str(e)}', exc_info=True)
         return {
-            'structure_paths': Path(''),
+            'structure_paths': None,
             'message': f'Interface structure building failed: {str(e)}'
         }
 
