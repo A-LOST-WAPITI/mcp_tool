@@ -755,11 +755,10 @@ def generate_crystalformer_structures(
     cond_model_type: List[str],
     target_values: List[float],
     target_type: List[str],
-    alpha: List[float],
-    space_group_min: int,
-    random_spacegroup_num: int,
-    init_sample_num: int,
-    mc_steps: int
+    space_group: int,
+    init_sample_num_per_spg: int,
+    random_spacegroup_num: int = 0,
+    mc_steps: int = 500
 ) -> StructureResult:
     '''
     Generate crystal structures using CrystalFormer with specified conditional properties.
@@ -771,11 +770,15 @@ def generate_crystalformer_structures(
         target_type (List[str]): Type of target optimization for each property. Options:
             'equal', 'greater', 'less', 'minimize'. Note: for 'minimize', use small target values
             to avoid division by zero.
-        alpha (List[float]): Alpha weighting values for each property in multi-objective optimization.
-        space_group_min (int): Minimum space group number to consider during generation.
-        random_spacegroup_num (int): Number of random space groups to sample.
-        init_sample_num (int): Initial number of samples to generate for each space group.
-        mc_steps (int): Number of Monte Carlo steps for structure optimization.
+        space_group (int): Space group number to use for structure generation. When 
+            random_spacegroup_num=0, only this space group will be used. When 
+            random_spacegroup_num>0, this serves as the minimum space group number.
+        init_sample_num_per_spg (int): Initial number of samples to generate for each space group.
+        random_spacegroup_num (int): Number of random space groups to sample. Default 0.
+            - If 0: Generate structures only using the specified space_group
+            - If >0: Randomly sample this many space groups from the range [space_group, 230]
+              and generate structures for each sampled space group
+        mc_steps (int): Number of Monte Carlo steps for structure optimization. Default 500.
 
     Returns:
         StructureResult: Dictionary containing:
@@ -783,12 +786,15 @@ def generate_crystalformer_structures(
             - message (str): Success or error message
 
     Note:
-        All input lists (cond_model_type, target_values, target_type, alpha) must have 
-        the same length for consistency in multi-objective optimization.
+        - All input lists (cond_model_type, target_values, target_type) must have 
+          the same length for consistency in multi-objective optimization.
+        - Alpha weighting values are automatically set to 1.0 for most targets and 0.01 for 'minimize' targets.
+        - When random_spacegroup_num > 0, structures will be generated for randomly selected 
+          space groups with numbers >= space_group (up to space group 230).
     '''
     try:
-        assert len(cond_model_type) == len(target_values) == len(target_type) == len(alpha), \
-            'Length of cond_model_type, target_values, target_type, and alpha must be the same.'
+        assert len(cond_model_type) == len(target_values) == len(target_type), \
+            'Length of cond_model_type, target_values, and target_type must be the same.'
 
         ava_cond_model = [
             'bandgap',
@@ -812,6 +818,10 @@ def generate_crystalformer_structures(
         cal_output_path = workdir / 'outputs'
 
         mode = 'multi' if len(cond_model_type) > 1 else 'single'
+        alpha = [1.0] * len(cond_model_type)  # Default alpha values
+        for (idx, target_type) in enumerate(target_type):
+            if target_type == 'minimize':
+                alpha[idx] = 0.01  # Lower alpha for minimize targets
 
         cmd = [
             'uv', 'run', 'python',
@@ -821,8 +831,8 @@ def generate_crystalformer_structures(
             '--target', *[str(item) for item in target_values],
             '--target_type', *target_type,
             '--alpha', *[str(item) for item in alpha],
-            '--spacegroup', str(space_group_min),
-            '--init_sample_num', str(init_sample_num),
+            '--spacegroup', str(space_group),
+            '--init_sample_num', str(init_sample_num_per_spg),
             '--random_spacegroup_num', str(random_spacegroup_num),
             '--mc_steps', str(mc_steps),
             '--output_path', str(cal_output_path)
