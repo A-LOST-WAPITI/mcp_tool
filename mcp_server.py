@@ -752,9 +752,9 @@ FixCell = F
 
 @mcp.tool()
 def generate_crystalformer_structures(
-    cond_model_type: List[str],
-    target_values: List[float],
-    target_type: List[str],
+    cond_model_type_list: List[str],
+    target_value_list: List[float],
+    target_type_list: List[str],
     space_group: int,
     init_sample_num_per_spg: int,
     random_spacegroup_num: int = 0,
@@ -764,10 +764,10 @@ def generate_crystalformer_structures(
     Generate crystal structures using CrystalFormer with specified conditional properties.
 
     Args:
-        cond_model_type (List[str]): List of conditional model types. Supported types:
+        cond_model_type_list (List[str]): List of conditional model types. Supported types:
             'bandgap', 'shear_modulus', 'bulk_modulus', 'ambient_pressure', 'high_pressure', 'sound'.
-        target_values (List[float]): Target values for each property in cond_model_type.
-        target_type (List[str]): Type of target optimization for each property. Options:
+        target_value_list (List[float]): Target values for each property in cond_model_type_list.
+        target_type_list (List[str]): Type of target optimization for each property. Options:
             'equal', 'greater', 'less', 'minimize'. Note: for 'minimize', use small target values
             to avoid division by zero.
         space_group (int): Space group number to use for structure generation. When 
@@ -786,14 +786,14 @@ def generate_crystalformer_structures(
             - message (str): Success or error message
 
     Note:
-        - All input lists (cond_model_type, target_values, target_type) must have 
+        - All input lists (cond_model_type_list, target_value_list, target_type_list) must have 
           the same length for consistency in multi-objective optimization.
         - Alpha weighting values are automatically set to 1.0 for most targets and 0.01 for 'minimize' targets.
         - When random_spacegroup_num > 0, structures will be generated for randomly selected 
           space groups with numbers >= space_group (up to space group 230).
     '''
     try:
-        assert len(cond_model_type) == len(target_values) == len(target_type), \
+        assert len(cond_model_type_list) == len(target_value_list) == len(target_type_list), \
             'Length of cond_model_type, target_values, and target_type must be the same.'
 
         ava_cond_model = [
@@ -804,12 +804,12 @@ def generate_crystalformer_structures(
             'high_pressure',
             'sound'
         ]
-        assert np.all([model_type in ava_cond_model for model_type in cond_model_type]), \
+        assert np.all([model_type in ava_cond_model for model_type in cond_model_type_list]), \
             'Model type must be one of the following: ' + \
             ', '.join(ava_cond_model)
 
         ava_value_type = ['equal', 'greater', 'less', 'minimize']
-        assert np.all([t in ava_value_type for t in target_type]), \
+        assert np.all([t in ava_value_type for t in target_type_list]), \
             'Target type must be one of the following: ' + \
             ', '.join(ava_value_type)
 
@@ -817,9 +817,9 @@ def generate_crystalformer_structures(
         workdir = Path('/opt/agents/mcp_tool')
         cal_output_path = workdir / 'outputs'
 
-        mode = 'multi' if len(cond_model_type) > 1 else 'single'
-        alpha = [1.0] * len(cond_model_type)  # Default alpha values
-        for (idx, target_type) in enumerate(target_type):
+        mode = 'multi' if len(cond_model_type_list) > 1 else 'single'
+        alpha = [1.0] * len(cond_model_type_list)  # Default alpha values
+        for (idx, target_type) in enumerate(target_type_list):
             if target_type == 'minimize':
                 alpha[idx] = 0.01  # Lower alpha for minimize targets
 
@@ -827,9 +827,9 @@ def generate_crystalformer_structures(
             'uv', 'run', 'python',
             'mcp_tool.py',
             '--mode', mode,
-            '--cond_model_type', *cond_model_type,
-            '--target', *[str(item) for item in target_values],
-            '--target_type', *target_type,
+            '--cond_model_type', *cond_model_type_list,
+            '--target', *[str(item) for item in target_value_list],
+            '--target_type', *target_type_list,
             '--alpha', *[str(item) for item in alpha],
             '--spacegroup', str(space_group),
             '--init_sample_num', str(init_sample_num_per_spg),
