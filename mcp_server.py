@@ -763,9 +763,9 @@ def generate_crystalformer_structures(
     '''
     Generate crystal structures using CrystalFormer with specified conditional properties.
     
-    This MCP tool requires the agent/user to explicitly specify the target space group(s) 
-    for structure generation. The tool does not automatically determine space groups - 
-    all space group selections must be provided by the calling agent.
+    This MCP tool requires the agent to ASK THE USER to specify the target space group(s) 
+    for structure generation. The agent MUST NOT automatically determine or guess space groups - 
+    the agent should always prompt the user to provide the space group number(s).
 
     Args:
         cond_model_type_list (List[str]): List of conditional model types. Supported types:
@@ -774,9 +774,10 @@ def generate_crystalformer_structures(
         target_type_list (List[str]): Type of target optimization for each property. Options:
             'equal', 'greater', 'less', 'minimize'. Note: for 'minimize', use small target values
             to avoid division by zero.
-        space_group (int): **REQUIRED** - Space group number that must be explicitly provided 
-            by the agent/user (1-230). This tool will not select a space group automatically.
-            - When random_spacegroup_num=0: Only this specified space group will be used
+        space_group (int): **MUST BE PROVIDED BY USER** - Space group number (1-230) that the 
+            agent should obtain by asking the user. The agent should never guess or automatically 
+            select this value.
+            - When random_spacegroup_num=0: Only this user-specified space group will be used
             - When random_spacegroup_num>0: This serves as the minimum space group number
         init_sample_num_per_spg (int): Initial number of samples to generate for each space group.
         random_spacegroup_num (int): Number of random space groups to sample. Default 0.
@@ -790,14 +791,15 @@ def generate_crystalformer_structures(
             - structure_paths (Path): Directory path containing generated structure files
             - message (str): Success or error message
 
-    Important Notes:
-        - This is an MCP tool designed for agent use. The agent must provide all required parameters.
-        - The space_group parameter is mandatory and must be explicitly specified by the calling agent.
+    Critical Agent Instructions:
+        - ALWAYS ask the user to specify the space group number before using this tool
+        - DO NOT make assumptions about which space group to use
+        - DO NOT automatically select a space group based on other parameters
+        - The user must explicitly provide the space_group parameter value
+        - If the user doesn't know which space group to use, help them understand the options (1-230)
         - All input lists (cond_model_type_list, target_value_list, target_type_list) must have 
           the same length for consistency in multi-objective optimization.
         - Alpha weighting values are automatically set to 1.0 for most targets and 0.01 for 'minimize' targets.
-        - When random_spacegroup_num > 0, structures will be generated for randomly selected 
-          space groups with numbers >= the user-specified space_group (up to space group 230).
     '''
     try:
         assert len(cond_model_type_list) == len(target_value_list) == len(target_type_list), \
