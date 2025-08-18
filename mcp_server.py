@@ -756,7 +756,7 @@ def generate_crystalformer_structures(
     target_value_list: List[float],
     target_type_list: List[str],
     space_group: int,
-    init_sample_num: int,
+    sample_num: int,
     random_spacegroup_num: int = 0,
     mc_steps: int = 500
 ) -> StructureResult:
@@ -779,7 +779,7 @@ def generate_crystalformer_structures(
             select this value.
             - When random_spacegroup_num=0: Only this user-specified space group will be used
             - When random_spacegroup_num>0: This serves as the minimum space group number
-        init_sample_num (int): Total initial number of samples to generate. When random_spacegroup_num=0,
+        sample_num (int): Total initial number of samples to generate. When random_spacegroup_num=0,
             all samples use the specified space group. When random_spacegroup_num>0, this total is
             divided equally among the randomly selected space groups.
         random_spacegroup_num (int): Number of random space groups to sample. Default 0.
@@ -833,7 +833,7 @@ def generate_crystalformer_structures(
         for (idx, target_type) in enumerate(target_type_list):
             if target_type == 'minimize':
                 alpha[idx] = 0.01  # Lower alpha for minimize targets
-        init_sample_num_per_spg = init_sample_num if random_spacegroup_num == 0 else init_sample_num // random_spacegroup_num
+        sample_num_per_spg = sample_num if random_spacegroup_num == 0 else sample_num // random_spacegroup_num
 
         cmd = [
             'uv', 'run', 'python',
@@ -844,7 +844,7 @@ def generate_crystalformer_structures(
             '--target_type', *target_type_list,
             '--alpha', *[str(item) for item in alpha],
             '--spacegroup', str(space_group),
-            '--init_sample_num', str(init_sample_num_per_spg),
+            '--init_sample_num', str(sample_num_per_spg),
             '--random_spacegroup_num', str(random_spacegroup_num),
             '--mc_steps', str(mc_steps),
             '--output_path', str(cal_output_path)
