@@ -762,6 +762,10 @@ def generate_crystalformer_structures(
 ) -> StructureResult:
     '''
     Generate crystal structures using CrystalFormer with specified conditional properties.
+    
+    This MCP tool requires the agent/user to explicitly specify the target space group(s) 
+    for structure generation. The tool does not automatically determine space groups - 
+    all space group selections must be provided by the calling agent.
 
     Args:
         cond_model_type_list (List[str]): List of conditional model types. Supported types:
@@ -770,14 +774,15 @@ def generate_crystalformer_structures(
         target_type_list (List[str]): Type of target optimization for each property. Options:
             'equal', 'greater', 'less', 'minimize'. Note: for 'minimize', use small target values
             to avoid division by zero.
-        space_group (int): Space group number to use for structure generation. When 
-            random_spacegroup_num=0, only this space group will be used. When 
-            random_spacegroup_num>0, this serves as the minimum space group number.
+        space_group (int): **REQUIRED** - Space group number that must be explicitly provided 
+            by the agent/user (1-230). This tool will not select a space group automatically.
+            - When random_spacegroup_num=0: Only this specified space group will be used
+            - When random_spacegroup_num>0: This serves as the minimum space group number
         init_sample_num_per_spg (int): Initial number of samples to generate for each space group.
         random_spacegroup_num (int): Number of random space groups to sample. Default 0.
-            - If 0: Generate structures only using the specified space_group
+            - If 0: Generate structures only using the user-specified space_group
             - If >0: Randomly sample this many space groups from the range [space_group, 230]
-              and generate structures for each sampled space group
+              where space_group is the user-provided minimum value
         mc_steps (int): Number of Monte Carlo steps for structure optimization. Default 500.
 
     Returns:
@@ -785,12 +790,14 @@ def generate_crystalformer_structures(
             - structure_paths (Path): Directory path containing generated structure files
             - message (str): Success or error message
 
-    Note:
+    Important Notes:
+        - This is an MCP tool designed for agent use. The agent must provide all required parameters.
+        - The space_group parameter is mandatory and must be explicitly specified by the calling agent.
         - All input lists (cond_model_type_list, target_value_list, target_type_list) must have 
           the same length for consistency in multi-objective optimization.
         - Alpha weighting values are automatically set to 1.0 for most targets and 0.01 for 'minimize' targets.
         - When random_spacegroup_num > 0, structures will be generated for randomly selected 
-          space groups with numbers >= space_group (up to space group 230).
+          space groups with numbers >= the user-specified space_group (up to space group 230).
     '''
     try:
         assert len(cond_model_type_list) == len(target_value_list) == len(target_type_list), \
